@@ -612,7 +612,7 @@ fn parse_img2sb(file: &[u8], args: &Args) {
     }
 }
 
-fn checkvalid_decry(buf: &[u8], expected: u32) -> Option<Vec<u8>> {
+fn checkvalid_decry(buf: &[u8], expected: u32, ext: bool) -> Option<Vec<u8>> {
     let iboottags = [
         0x69_6C_6C_62, // illb
         0x69_62_6F_74, // ibot
@@ -635,16 +635,18 @@ fn checkvalid_decry(buf: &[u8], expected: u32) -> Option<Vec<u8>> {
        (expected == 0x6B_72_6E_6C || //krnl
         expected == 0x72_6B_72_6E) { //rkrn
         println!("Found compressed kernelcache");
-        let lzsstr = cast_struct!(LZSSHead, buf);
-        assert_eq!(&lzsstr.comp_data[0..4], b"\xFF\xCE\xFA\xED");
-        let mut decompdata = Vec::with_capacity(lzsstr.decomp_len as usize);
-        lzss_decode_block_content(
-            &mut Cursor::new(&lzsstr.comp_data), 
-            lzsstr.comp_len as u64, 
-            &mut decompdata
-        ).unwrap_or_else(|e| panic!("Unable to decompress kernelcache: {}", e));
-        assert_eq!(decompdata.len(), lzsstr.decomp_len as usize);
-        return Some(decompdata);
+        if !ext {
+            let lzsstr = cast_struct!(LZSSHead, buf);
+            assert_eq!(&lzsstr.comp_data[0..4], b"\xFF\xCE\xFA\xED");
+            let mut decompdata = Vec::with_capacity(lzsstr.decomp_len as usize);
+            lzss_decode_block_content(
+                &mut Cursor::new(&lzsstr.comp_data), 
+                lzsstr.comp_len as u64, 
+                &mut decompdata
+            ).unwrap_or_else(|e| panic!("Unable to decompress kernelcache: {}", e));
+            assert_eq!(decompdata.len(), lzsstr.decomp_len as usize);
+            return Some(decompdata);
+        }
     } else if (&buf[range_size(0x400, 2)] == b"H+"  //kHFSPlusSigWord
             || &buf[range_size(0x400, 2)] == b"HX") //kHFSXSigWord
             && expected == 0x72_64_73_6B { //rdsk
@@ -969,18 +971,17 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                         taghead.buf = buf.clone();
                         struct_write!(taghead, file[i..]);
                     } else {
-                        if !args.ext {
-                            if let Some(data) = checkvalid_decry(&buf, head.img3_type) {
-                                write_file(path, &data);
-                                exit(0);
-                            }
+                        if let Some(data) = checkvalid_decry(&buf, head.img3_type, args.ext) {
+                            write_file(path, &data);
+                            exit(0);
+                        } else {
+                            write_file(path, &buf);
+                            exit(0);
                         }
-                        write_file(path, &buf);
-                        exit(0);
                     }
                 } else if argc == 3 {
                     if let Some(path) = &args.outfile {
-                        if let Some(data) = checkvalid_decry(&taghead.buf, head.img3_type) {
+                        if let Some(data) = checkvalid_decry(&taghead.buf, head.img3_type, args.ext) {
                             write_file(path, &data);
                         } else {
                             write_file(path, &taghead.buf);
