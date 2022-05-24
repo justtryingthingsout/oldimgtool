@@ -1,5 +1,3 @@
-//mostly just copied off from iBoot src
-
 pub use binrw::{
     binrw, 
     BinRead, 
@@ -159,31 +157,31 @@ type Img2HeaderExtensionType = [u8; 4];
 #[br(little, import(cur_size: u32))]
 #[derive(Default, Debug)]
 pub struct IMG2ExtHeader {
-	pub check:      u32,	    /* CRC-32 of the succeeding fields */
-	pub next_size:  u32,	    /* Size in bytes of the next extension */
-	pub ext_type:   Img2HeaderExtensionType,
-	pub opt:        u32,
+    pub check:      u32,        /* CRC-32 of the succeeding fields */
+    pub next_size:  u32,        /* Size in bytes of the next extension */
+    pub ext_type:   Img2HeaderExtensionType,
+    pub opt:        u32,
     #[br(count = cur_size)]
-	pub data:       Vec<u8>,	/* Extension data. */
+    pub data:       Vec<u8>,    /* Extension data. */
 }
 
 #[binrw]
 #[br(little)]
 #[derive(Default, Debug)]
 pub struct IMG2Superblock {
-	magic: u32,
-	image_granule: u32,  /* fundamental block size (bytes) */
-	image_offset: u32,   /* image header offset within granule (image granules) */
-	boot_blocksize: u32, /* size of the bootblock (image granules) */
-	image_avail: u32,    /* total granules available for images. */
-	nvram_granule: u32,  /* size of NVRAM blocks (bytes) */
-	nvram_offset: u32,   /* offset to first NVRAM block (nvram granules) */
-	flags: u32, /* flags field reserved for future use */
-	rsvd1: u32, /* reserved 1 for future use */
-	rsvd2: u32, /* reserved 2 for future use */
-	rsvd3: u32, /* reserved 3 for future use */
-	rsvd4: u32, /* reserved 4 for future use */
-	check: u32, /* CRC-32 of header fields preceding this one */
+    magic: u32,
+    image_granule: u32,  /* fundamental block size (bytes) */
+    image_offset: u32,   /* image header offset within granule (image granules) */
+    boot_blocksize: u32, /* size of the bootblock (image granules) */
+    image_avail: u32,    /* total granules available for images. */
+    nvram_granule: u32,  /* size of NVRAM blocks (bytes) */
+    nvram_offset: u32,   /* offset to first NVRAM block (nvram granules) */
+    flags: u32, /* flags field reserved for future use */
+    rsvd1: u32, /* reserved 1 for future use */
+    rsvd2: u32, /* reserved 2 for future use */
+    rsvd3: u32, /* reserved 3 for future use */
+    rsvd4: u32, /* reserved 4 for future use */
+    check: u32, /* CRC-32 of header fields preceding this one */
 }
 
 pub const S5L8720_HEADER_MAGIC: &[u8; 4] = b"8720";
@@ -196,14 +194,14 @@ pub const IMG3_HEADER_CIGAM:    &[u8; 4] = b"3gmI";
 #[br(little)]
 #[derive(Debug)]
 pub struct IMG3ObjHeader {
-	// these fields are unsigned
-	pub magic: [u8; 4],
-	pub skip_dist: u32,
-	pub buf_len: u32,
+    // these fields are unsigned
+    pub magic: [u8; 4],
+    pub skip_dist: u32,
+    pub buf_len: u32,
 
     // these fields are signed
-	pub signed_len: u32,
-	pub img3_type: u32,
+    pub signed_len: u32,
+    pub img3_type: u32,
     //Vec<IMG3TagHeaders> follow
 }
 
@@ -211,11 +209,11 @@ pub struct IMG3ObjHeader {
 #[br(little)]
 #[derive(Debug, Clone)]
 pub struct IMG3TagHeader {
-	pub tag: [u8; 4],
-	pub skip_dist: u32,
-	pub buf_len: u32,
+    pub tag: [u8; 4],
+    pub skip_dist: u32,
+    pub buf_len: u32,
     #[br(count = buf_len)]
-	pub buf: Vec<u8>,
+    pub buf: Vec<u8>,
     #[br(count = skip_dist - buf_len - 12)]
     pub pad: Vec<u8>
 }
@@ -223,32 +221,32 @@ pub struct IMG3TagHeader {
 #[derive(BinRead, BinWrite, Debug)]
 #[br(little)]
 pub struct IMG3TagString{
-	/* number of valid bytes in the buffer */
-	pub str_len: u32,
+    /* number of valid bytes in the buffer */
+    pub str_len: u32,
     #[br(count(str_len))]
     #[br(map = |s: Vec<u8>| String::from_utf8(s).unwrap())]
     #[bw(map = String::as_bytes)]
-	pub str_bytes: String,
+    pub str_bytes: String,
 }
 
 #[binrw]
 #[br(little)]
 #[derive(Debug)]
 pub struct IMG3KBAG {
-	pub selector: u32,
-	pub key_size: u32,
-	pub iv_bytes: [u8; 16],
-	pub key_bytes: [u8; 32]
+    pub selector: u32,
+    pub key_size: u32,
+    pub iv_bytes: [u8; 16],
+    pub key_bytes: [u8; 32]
 }
 
 #[binrw]
 #[br(big)]
 #[derive(Debug)]
 pub struct LZSSHead {
-	pub magic: [u8; 8],
-	pub adler32: u32,
-	pub decomp_len: u32,
-	pub comp_len: u32,
+    pub magic: [u8; 8],
+    pub adler32: u32,
+    pub decomp_len: u32,
+    pub comp_len: u32,
     unk: u32,
     #[br(count = 360)]
     pad: Vec<u8>,
