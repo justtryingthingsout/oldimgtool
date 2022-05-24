@@ -39,16 +39,16 @@ Setters:
 ```
 
 ## Examples
-Extracting a image:
+Extracting a image:  
 `oldimgtool applelogo@2x~iphone.s5l8950x.img3 logo.bin`
 
-Extracting a image using a decryption IV and keys:
+Extracting a image using a decryption IV and keys:  
 `oldimgtool --iv e8744b87c6b4c134c00432a5b8af302b -k 7b2764a96f1ab43ebc73e2167c774cefaed671d5c4522bae12d7e0e9da3e7e3a iBoot.n94ap.RELEASE.img3 iboot.bin`
 
-Extracting a image's keybags:
+Extracting a image's keybags:  
 `oldimgtool -b iBoot.n94ap.RELEASE.img3`
 
-Verifying a image's integrity and output the image's type
+Verifying a image's integrity and output the image's type:  
 `oldimgtool -v -t iBoot.n94ap.RELEASE.img3`
 
 ## Building
