@@ -95,7 +95,7 @@ struct Args {
     certpath: Option<String>,
 
     //create
-    #[clap(short='m', long, help="Create a image with a image type", value_name="S5L|IMG3")]
+    #[clap(short='m', long, help="Create a image with a image type (setters will be used)", value_name="S5L|IMG3")]
     create: Option<String>,
 }
 

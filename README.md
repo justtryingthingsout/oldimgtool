@@ -3,7 +3,7 @@ A img2/3 parser, made in rust
 
 ## Usage:
 ```
-    oldimgtool [OPTIONS] <INPUT> [OUTPUT]
+oldimgtool [OPTIONS] <INPUT> [OUTPUT]
 
 Arguments:
     <INPUT>     Input filename
