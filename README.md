@@ -1,7 +1,7 @@
 # oldimgtool
 A img2/3 parser, made in rust
 
-## Usage:
+## Usage
 ```
 oldimgtool [OPTIONS] <INPUT> [OUTPUT]
 
@@ -17,7 +17,7 @@ Options:
     -h, --help                 Print help information
         --iv <IV>              Specify iv for decryption
     -k, --key <KEY|IVKEY>      Specify key for decryption
-    -m, --create <S5L|IMG3>    Create a image with a image type
+    -m, --create <S5L|IMG3>    Create a image with a image type (setters will be used)
     -v, --verify               Verify the image
         --version              Print version information
 
@@ -38,7 +38,20 @@ Setters:
     -V <VERSION>                Set the version string in IMG3
 ```
 
-## Building:
+## Examples
+Extracting a image:
+`oldimgtool applelogo@2x~iphone.s5l8950x.img3 logo.bin`
+
+Extracting a image using a decryption IV and keys:
+`oldimgtool --iv e8744b87c6b4c134c00432a5b8af302b -k 7b2764a96f1ab43ebc73e2167c774cefaed671d5c4522bae12d7e0e9da3e7e3a iBoot.n94ap.RELEASE.img3 iboot.bin`
+
+Extracting a image's keybags:
+`oldimgtool -b iBoot.n94ap.RELEASE.img3`
+
+Verifying a image's integrity and output the image's type
+`oldimgtool -v -t iBoot.n94ap.RELEASE.img3`
+
+## Building
 First, install `cargo` if you haven't already, instructions are [here](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 Then, run `cargo install`, and finally use it with `oldimgtool`.
 
