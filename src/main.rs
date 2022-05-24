@@ -973,11 +973,10 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                     } else {
                         if let Some(data) = checkvalid_decry(&buf, head.img3_type, args.ext) {
                             write_file(path, &data);
-                            exit(0);
                         } else {
                             write_file(path, &buf);
-                            exit(0);
                         }
+                        exit(0);
                     }
                 } else if argc == 3 {
                     if let Some(path) = &args.outfile {
