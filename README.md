@@ -1,7 +1,7 @@
 # oldimgtool
 A img2/3 parser, made in rust
 
-Usage:
+## Usage:
 ```
     oldimgtool [OPTIONS] <INPUT> [OUTPUT]
 
@@ -38,5 +38,10 @@ Setters:
     -V <VERSION>                Set the version string in IMG3
 ```
 
-Build:
-`cargo install` and use it with `oldimgtool`
+## Building:
+First, install `cargo` if you haven't already, instructions are [here](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+Then, run `cargo install`, and finally use it with `oldimgtool`.
+
+## Credits
+* iphone-dataprotection for the IMG3 SHSH verifier logic
+* @pingw33n for the LZSS decoder made in Rust
