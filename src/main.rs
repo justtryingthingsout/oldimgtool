@@ -978,15 +978,13 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                         }
                         exit(0);
                     }
-                } else if argc == 3 {
-                    if let Some(path) = &args.outfile {
-                        if let Some(data) = checkvalid_decry(&taghead.buf, head.img3_type, args.ext) {
-                            write_file(path, &data);
-                        } else {
-                            write_file(path, &taghead.buf);
-                        }
-                        exit(0);
+                } else if let Some(path) = &args.outfile {
+                    if let Some(data) = checkvalid_decry(&taghead.buf, head.img3_type, args.ext) {
+                        write_file(path, &data);
+                    } else {
+                        write_file(path, &taghead.buf);
                     }
+                    exit(0);
                 } else if let Some(datapath) = &args.setdata {
                     let datafile = fs::read(datapath).unwrap();
                     let taglen = 12 + (taghead.buf.len() + taghead.pad.len()) as u32;
