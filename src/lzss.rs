@@ -1,81 +1,46 @@
-// credits to https://github.com/pingw33n/vault13/blob/master/src/fs/dat/lzss.rs
+#[allow(warnings)]
+mod bindings {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
 
-// this whole project's license is GPL because the project I copied it from (the above) is GPL
+use bindings::*;
 
-use byteorder::{ReadBytesExt, WriteBytesExt};
-use std::io::prelude::*;
-use std::io::Result;
+use crate::utils::LZSSHead;
 
-pub fn lzss_decode_block_content(inp: &mut dyn Read, block_size: u64, out: &mut dyn Write) -> Result<u64> {
-    const N: usize = 4096;
-    const F: usize = 18;
-    const THRESHOLD: usize = 2;
-
-    let mut text_buf = [0x20; N + F - 1];
-    let mut r = N - F;
-    let mut flags = 0i32;
-
-    let mut block_read = 0u64;
-    let mut block_written = 0u64;
-
-    loop {
-        flags >>= 1;
-        if flags & 0x100 == 0 {
-            if block_read >= block_size {
-                break;
-            }
-            let b = inp.read_u8()? as i32;
-            block_read += 1;
-
-            if block_read >= block_size {
-                break;
-            }
-
-            flags = b | 0xff00;
-        }
-
-        if (flags & 1) != 0 {
-            if block_read >= block_size {
-                break;
-            }
-
-            let mut i = inp.read_u8()? as usize;
-            block_read += 1;
-
-            if block_read >= block_size {
-                break;
-            }
-
-            let mut j = inp.read_u8()? as usize;
-            block_read += 1;
-
-            i |= (j & 0xf0) << 4;
-            j = (j & 0x0f) + THRESHOLD;
-
-            for k in 0..=j {
-                let b = text_buf[(i + k) & (N - 1)];
-
-                out.write_u8(b)?;
-                block_written += 1;
-
-                text_buf[r] = b;
-                r = (r + 1) & (N - 1);
-            }
-        } else {
-            let b = inp.read_u8()?;
-            block_read += 1;
-
-            out.write_u8(b)?;
-            block_written += 1;
-
-            if block_read >= block_size {
-                break;
-            }
-
-            text_buf[r] = b;
-            r = (r + 1) & (N - 1);
-        }
+pub fn create_complzss_header(data: &[u8], comp_data: Vec<u8>) -> LZSSHead {
+    let datptr = data.as_ptr();
+    let adler32 = unsafe { 
+        //SAFETY: so long as data.len() is <= to the actual data size, this should be safe, undefined behavior otherwise
+        local_adler32(datptr, data.len().try_into().unwrap())
+    } as u32;
+    LZSSHead {
+        magic: *b"complzss",
+        adler32,
+        decomp_len: data.len() as u32,
+        comp_len: comp_data.len() as u32,
+        unk: 1,
+        pad: vec![0; 360],
+        comp_data
     }
+}
 
-    Ok(block_written)
+pub fn decomp_lzss(data: &[u8], len: u32, adler32: u32) -> Option<Vec<u8>> {
+    let mut decmpvec = Vec::with_capacity(len as usize);
+    let sz: u32 = unsafe { decompress_lzss(decmpvec.as_mut_ptr(), len, data.as_ptr(), data.len() as u32) }.try_into().unwrap();
+    assert!(sz <= len, "LZSS compress wrote beyond allocated buffer"); //program is no longer stable, crash (this should never happen)
+    if unsafe { local_adler32(decmpvec.as_ptr(), len.try_into().unwrap()) } as u32 != adler32 { 
+        None
+    } else {
+        Some(decmpvec)
+    }
+}
+
+pub fn comp_lzss(data: &[u8]) -> Vec<u8> {
+    let mut cmpvec = Vec::with_capacity(data.len());
+    let cmpvecptr = cmpvec.as_mut_ptr();
+    let outptr = unsafe { compress_lzss(cmpvecptr, cmpvec.capacity() as u32, data.as_ptr(), data.len() as u32) };
+    let sz = outptr as usize - cmpvecptr as usize;
+    assert!(sz <= data.len(), "LZSS decompress wrote beyond allocated buffer"); //program is no longer stable, crash (this should never happen)
+    unsafe { cmpvec.set_len(sz); }
+    cmpvec
 }

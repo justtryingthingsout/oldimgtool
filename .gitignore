@@ -1,3 +1,6 @@
 /target
 /ok.tcl
 /Cargo.lock
+.DS_Store
+.vscode/
+/aproms

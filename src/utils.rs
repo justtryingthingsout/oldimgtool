@@ -55,7 +55,7 @@ macro_rules! cast_struct_args {
 macro_rules! struct_write {
     ($str: expr, $arr: expr) => {
         $str
-        .write_to(&mut Cursor::new(&mut $arr))
+        .write(&mut Cursor::new(&mut $arr))
         .unwrap_or_else(|e| panic!("Unable to write to buffer: {e}"));
     }
 }
@@ -88,9 +88,10 @@ pub fn revstr_from_le_bytes(arr: &[u8]) -> String {
 }
 
 //resize buffer and pad to a 4 byte boundary, deleting or inserting bytes as needed
-pub fn do_resize(head: &mut IMG3TagHeader, file: &mut Vec<u8>, off: usize, taglen: u32, pad: &[u8]) {
+pub fn do_resize(mainhead: &mut IMG3ObjHeader, head: &mut IMG3TagHeader, file: &mut Vec<u8>, off: usize, taglen: u32, newdat: Vec<u8>) {
     let oldbuf = head.buf_len;
-    head.buf.resize(taglen as usize, 0);
+    let newlen = newdat.len();
+    head.buf = newdat;
     head.buf_len = taglen;
     let newbuf = taglen;
     if oldbuf > newbuf {
@@ -101,7 +102,7 @@ pub fn do_resize(head: &mut IMG3TagHeader, file: &mut Vec<u8>, off: usize, tagle
 
     //fix padding
     let oldpad = head.pad.len();
-    head.pad.resize(pad.len() % 4, 0); //needs to be on a 4 byte boundary
+    head.pad.resize(newlen % 4, 0); //needs to be on a 4 byte boundary
     let newpad = head.pad.len();
     if oldpad > newpad {
         file.drain(range_size(off + 12 + head.buf_len as usize + newpad, (oldpad - newpad) as usize));
@@ -109,16 +110,20 @@ pub fn do_resize(head: &mut IMG3TagHeader, file: &mut Vec<u8>, off: usize, tagle
         file.splice(range_size(off + 12 + oldpad as usize, 0), vec![0; (newpad - oldpad) as usize]);
     }
     head.skip_dist = 12 + newbuf + newpad as u32 - 1;
+    let chg = oldbuf - newbuf;
+    mainhead.buf_len -= chg;
+    mainhead.skip_dist -= chg;
 
     struct_write!(head, file[off..]);
+    struct_write!(mainhead, file[0..]);
 }
 
 
 #[binrw]
-#[br(little)]
+#[brw(little)]
 #[derive(Debug)]
 pub struct S5LHeader {
-    pub platform:            [u8; 4],
+    pub platform:         [u8; 4],
     pub version:          [u8; 3],
     pub format:           u8,
     pub entry:            u32,
@@ -134,7 +139,7 @@ pub struct S5LHeader {
 }
 
 #[binrw]
-#[br(little)]
+#[brw(little)]
 #[derive(Debug)]
 pub struct IMG2Header {
     pub magic:           [u8; 4],
@@ -166,32 +171,51 @@ pub struct IMG2ExtHeader {
 }
 
 #[binrw]
-#[br(little)]
+#[brw(little)]
 #[derive(Default, Debug)]
 pub struct IMG2Superblock {
     magic: u32,
-    image_granule: u32,  /* fundamental block size (bytes) */
-    image_offset: u32,   /* image header offset within granule (image granules) */
-    boot_blocksize: u32, /* size of the bootblock (image granules) */
-    image_avail: u32,    /* total granules available for images. */
-    nvram_granule: u32,  /* size of NVRAM blocks (bytes) */
-    nvram_offset: u32,   /* offset to first NVRAM block (nvram granules) */
-    flags: u32, /* flags field reserved for future use */
-    rsvd1: u32, /* reserved 1 for future use */
-    rsvd2: u32, /* reserved 2 for future use */
-    rsvd3: u32, /* reserved 3 for future use */
-    rsvd4: u32, /* reserved 4 for future use */
-    check: u32, /* CRC-32 of header fields preceding this one */
+    image_granule:  u32, // fundamental block size (bytes)
+    image_offset:   u32, // image header offset within granule (image granules)
+    boot_blocksize: u32, // size of the bootblock (image granules)
+    image_avail:    u32, // total granules available for images
+    nvram_granule:  u32, // size of NVRAM blocks (bytes)
+    nvram_offset:   u32, // offset to first NVRAM block (nvram granules)
+    flags: u32, // flags field reserved for future use
+    rsvd1: u32, // reserved 1 for future use
+    rsvd2: u32, // reserved 2 for future use
+    rsvd3: u32, // reserved 3 for future use
+    rsvd4: u32, // reserved 4 for future use
+    check: u32, // CRC-32 of header fields preceding this one
 }
 
-pub const S5L8720_HEADER_MAGIC: &[u8; 4] = b"8720";
-pub const S5L8900_HEADER_MAGIC: &[u8; 4] = b"8900";
-pub const IMG2_SB_HEADER_MAGIC:    &[u8; 4] = b"IMG2";
-pub const IMG2_HEADER_CIGAM:    &[u8; 4] = b"2gmI";
-pub const IMG3_HEADER_CIGAM:    &[u8; 4] = b"3gmI";
+pub const S5L8720_HEADER_MAGIC: [u8; 4] = *b"8720";
+pub const S5L8900_HEADER_MAGIC: [u8; 4] = *b"8900";
+pub const IMG2_SB_HEADER_MAGIC: [u8; 4] = *b"IMG2";
+pub const IMG2_HEADER_CIGAM:    [u8; 4] = *b"2gmI";
+pub const IMG3_HEADER_CIGAM:    [u8; 4] = *b"3gmI";
+
+pub const IMG3_GAT_DATA:              [u8; 4]    = *b"ATAD";
+pub const IMG3_GAT_SIGNED_HASH:       [u8; 4]    = *b"HSHS";
+pub const IMG3_GAT_CERTIFICATE_CHAIN: [u8; 4]    = *b"TREC";
+pub const IMG3_GAT_VERSION:           [u8; 4]    = *b"SREV";
+//pub const IMG3_GAT_SECURITY_EPOCH:    [u8; 4]    = *b"OPES";
+//pub const IMG3_GAT_SECURITY_DOMAIN:   [u8; 4]    = *b"MODS";
+//pub const IMG3_GAT_PRODUCTION_STATUS: [u8; 4]    = *b"DORP";
+//pub const IMG3_GAT_CHIP_TYPE:         [u8; 4]    = *b"PIHC";
+//pub const IMG3_GAT_BOARD_TYPE:        [u8; 4]    = *b"DROB";
+//pub const IMG3_GAT_UNIQUE_ID:         [u8; 4]    = *b"DICE";
+//pub const IMG3_GAT_RANDOM_PAD:        [u8; 4]    = *b"TLAS";
+pub const IMG3_GAT_TYPE:              [u8; 4]    = *b"EPYT";
+//pub const IMG3_GAT_OVERRIDE:          [u8; 4]    = *b"DRVO";
+//pub const IMG3_GAT_HARDWARE_EPOCH:    [u8; 4]    = *b"OPEC";
+//pub const IMG3_GAT_NONCE:             [u8; 4]    = *b"CNON";
+pub const IMG3_GAT_KEYBAG:            [u8; 4]    = *b"GABK";
+
+//pub const APPLE_CERT_SHA512: &str = "5621f576006af21c100ab091653762ccc72e66caadb5b61235ef2d91595cbcf897c449353e9ce818c97ab2a8ee938c7204ea38887cb4eb8e8cff3234edbcc65b";
 
 #[binrw]
-#[br(little)]
+#[brw(little)]
 #[derive(Debug)]
 pub struct IMG3ObjHeader {
     // these fields are unsigned
@@ -206,7 +230,7 @@ pub struct IMG3ObjHeader {
 }
 
 #[binrw]
-#[br(little)]
+#[brw(little)]
 #[derive(Debug, Clone)]
 pub struct IMG3TagHeader {
     pub tag: [u8; 4],
@@ -218,19 +242,19 @@ pub struct IMG3TagHeader {
     pub pad: Vec<u8>
 }
 
-#[derive(BinRead, BinWrite, Debug)]
-#[br(little)]
+#[binrw]
+#[derive(Debug)]
+#[brw(little)]
 pub struct IMG3TagString{
     /* number of valid bytes in the buffer */
     pub str_len: u32,
-    #[br(count(str_len))]
-    #[br(map = |s: Vec<u8>| String::from_utf8(s).unwrap())]
+    #[br(count(str_len), map = |s: Vec<u8>| String::from_utf8(s).unwrap())]
     #[bw(map = String::as_bytes)]
     pub str_bytes: String,
 }
 
 #[binrw]
-#[br(little)]
+#[brw(little)]
 #[derive(Debug)]
 pub struct IMG3KBAG {
     pub selector: u32,
@@ -240,16 +264,16 @@ pub struct IMG3KBAG {
 }
 
 #[binrw]
-#[br(big)]
+#[brw(big)]
 #[derive(Debug)]
 pub struct LZSSHead {
     pub magic: [u8; 8],
     pub adler32: u32,
     pub decomp_len: u32,
     pub comp_len: u32,
-    unk: u32,
+    pub unk: u32,
     #[br(count = 360)]
-    pad: Vec<u8>,
+    pub pad: Vec<u8>,
     #[br(count = comp_len)]
     pub comp_data: Vec<u8>
 }

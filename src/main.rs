@@ -1,9 +1,9 @@
 //clippy config
 #![warn(clippy::all, clippy::pedantic)]
 #![allow(
+    clippy::too_many_lines,
     clippy::cast_possible_truncation, //forced to do this since it has to fit in the struct
     clippy::cast_lossless,            //same reason as above
-    clippy::similar_names,            //'args' vs 'argc', lmk if anyone thinks up of better names
     clippy::if_not_else,              //block with more code on the top, also this is more clear
     clippy::struct_excessive_bools,   //arguments struct, can't change much
     clippy::wildcard_imports,         //too many imports to specify every one
@@ -15,7 +15,7 @@ use clap::Parser;
 use std::{
     fs, 
     process::exit, 
-    env
+    borrow::Cow
 };
 //use byteorder::{BigEndian, ReadBytesExt};
 use binrw::BinReaderExt;
@@ -36,15 +36,15 @@ use openssl::{
     hash::MessageDigest
 };
 
-use memchr::memmem::find;
+//use memchr::memmem::find;
 
-mod lzss;
 mod utils;
-use lzss::lzss_decode_block_content;
 use utils::*;
+mod lzss;
+use lzss::*;
 
 #[derive(Parser, Debug, Clone)]
-#[clap(author="@plzdonthaxme", version="1.0", about="A img2/3 parser, made in rust")]
+#[clap(author="@plzdonthaxme", version="1.1", about="A img2/3 parser, made in rust", disable_version_flag=true)]
 struct Args {
     //main args
     #[clap(help="Input filename", value_name="INPUT")]
@@ -65,6 +65,8 @@ struct Args {
     img2: bool,
     #[clap(short='e', help="Only extracts, do not decompress (only applies to kernel)")]
     ext: bool,
+    #[clap(long="comp", help="Compress the data before saving (use with -D)")]
+    comp: bool,
 
     //getters
     #[clap(long, help="Print version in IMG3", help_heading="GETTERS")]
@@ -81,13 +83,13 @@ struct Args {
     //setters
     #[clap(short='V', help="Set the version string in IMG3", value_name="VERSION", help_heading="SETTERS")]
     setver: Option<String>,
-    #[clap(short='K', help="Set the keybag and encrypt data with it, type can be prod or dev", multiple_values = true, max_values = 3, value_names = &["IV", "KEY", "TYPE"], help_heading="SETTERS")]
+    #[clap(short='K', help="Set the keybag and encrypt data with it, type can be prod or dev", value_names = &["IV", "KEY", "TYPE"], help_heading="SETTERS")]
     setkbag: Option<Vec<String>>,
     #[clap(short='B', help="Only set the keybag, do not encrypt", help_heading="SETTERS")]
     onlykbag: bool,
     #[clap(short='T', help="Set or rename the image type (4cc)", value_name="TYPE", help_heading="SETTERS")]
     settype: Option<String>,
-    #[clap(short='D', help="Set or replace the data buffer from a file", value_name="TYPE", help_heading="SETTERS")]
+    #[clap(short='D', help="Set or replace the data buffer from a file", value_name="FILE", help_heading="SETTERS")]
     setdata: Option<String>,
     #[clap(short='S', help="Set or replace the signature from a file", value_name="FILE", help_heading="SETTERS")]
     sigpath: Option<String>,
@@ -101,12 +103,12 @@ struct Args {
 
 fn format_type(value: u8) -> String {
     match value {
-        1 => String::from("Boot encrypted with UID-key"),
-        2 => String::from("Boot plaintext"),
-        3 => String::from("Encrypted with Key 0x837"),
-        4 => String::from("Plaintext"),
-        _ => format!("Unknown Format ({value})")
-    }
+        1 => Cow::from("Boot encrypted with UID-key"),
+        2 => Cow::from("Boot plaintext"),
+        3 => Cow::from("Encrypted with Key 0x837"),
+        4 => Cow::from("Plaintext"),
+        _ => Cow::from(format!("Unknown Format ({value})"))
+    }.to_string()
 }
 
 static OPTMAP: phf::Map<u32, &'static str> = phf_map! {
@@ -132,10 +134,10 @@ fn opts(val: u32) -> String {
     }
 }
 
-fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
+fn create_img3(mut buf: Vec<u8>, args: &Args, outpath: &str) {
     let mut newimg: Vec<u8> = Vec::new();
     let mut objh = IMG3ObjHeader {
-        magic: *IMG3_HEADER_CIGAM,
+        magic: IMG3_HEADER_CIGAM,
         skip_dist: 0,
         buf_len: 0,
         signed_len: 0,
@@ -148,7 +150,7 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
         assert!(settype.len() == 4, "Tag is not length 4");
         objh.img3_type = u32::from_be_bytes(settype.as_bytes().try_into().unwrap());
         sects.push(IMG3TagHeader {
-            tag: *b"EPYT",
+            tag: IMG3_GAT_TYPE,
             skip_dist: 0x20,
             buf_len: 4,
             buf: settype.chars().rev().collect::<String>().as_bytes().to_vec(),
@@ -156,9 +158,16 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
         });
     }
 
+    if args.comp {
+        let lzsscomp = comp_lzss(&buf);
+        let compsz = lzsscomp.len();
+        let lzsshead = create_complzss_header(&buf, lzsscomp);
+        struct_write!(lzsshead, buf);
+        buf.truncate(384 + compsz);
+    }
     let datlen = buf.len();
     sects.push(IMG3TagHeader {
-        tag: *b"ATAD",
+        tag: IMG3_GAT_DATA,
         skip_dist: 12 + (datlen + datlen % 4) as u32,
         buf_len: datlen as u32,
         buf,
@@ -174,7 +183,7 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
         struct_write!(tagstr, tagbuf);
         let buflen = tagbuf.len();
         sects.push(IMG3TagHeader {
-            tag: *b"SREV",
+            tag: IMG3_GAT_VERSION,
             skip_dist: 12 + (buflen + buflen % 4) as u32,
             buf_len: buflen as u32,
             buf: tagbuf,
@@ -185,7 +194,7 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
         let mut tagbuf = Vec::new();
         
         assert_eq!(kbg.len(), 3);
-        assert!(kbg[0].len() == 32, "IV is not 32 hex characters in length, instead got {}", kbg[1].len());
+        assert!(kbg[0].len() == 32, "IV is not 32 hex characters in length, instead got {}", kbg[0].len());
         let mut iv_bytes = hex::decode(&kbg[0]).unwrap();
         if iv_bytes.len() < 16 {
             let need = 16 - iv_bytes.len() + 1;
@@ -210,7 +219,7 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
         struct_write!(keyhead, tagbuf);
         let buflen = tagbuf.len();
         sects.push(IMG3TagHeader {
-            tag: *b"GABK",
+            tag: IMG3_GAT_KEYBAG,
             skip_dist: 12 + (buflen + buflen % 4) as u32,
             buf_len: buflen as u32,
             buf: tagbuf,
@@ -248,7 +257,7 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
         let sig = fs::read(sigpath).unwrap();
         let siglen = sig.len();
         sects.push(IMG3TagHeader {
-            tag: *b"HSHS",
+            tag: IMG3_GAT_SIGNED_HASH,
             skip_dist: 12 + (siglen + siglen % 4) as u32,
             buf_len: siglen as u32,
             buf: sig,
@@ -259,7 +268,7 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
         let cert = fs::read(certpath).unwrap();
         let certlen = cert.len();
         sects.push(IMG3TagHeader {
-            tag: *b"TREC",
+            tag: IMG3_GAT_CERTIFICATE_CHAIN,
             skip_dist: 12 + (certlen + certlen % 4) as u32,
             buf_len: certlen as u32,
             buf: cert,
@@ -270,7 +279,10 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
     let count: u32 = sects.iter().map(|x| x.skip_dist).sum();
     objh.skip_dist = 20 + count;
     objh.buf_len = count;
-    let signed: u32 = sects.iter().filter(|x| ![b"HSHS", b"TREC"].contains(&&x.tag)).map(|x| x.skip_dist).sum();
+    let signed: u32 = sects
+        .iter()
+        .filter_map(|x| (![b"HSHS", b"TREC"].contains(&&x.tag)).then_some(x.skip_dist))
+        .sum();
     objh.signed_len = signed;
     struct_write!(objh, newimg);
     for i in sects {
@@ -284,7 +296,7 @@ fn create_img3(buf: Vec<u8>, args: &Args, outpath: &str) {
 fn create_s5l(buf: &[u8], args: &Args, outpath: &str) {
     let mut newimg: Vec<u8> = Vec::new();
     let mut objh = S5LHeader {
-        platform: *b"8900",
+        platform: S5L8900_HEADER_MAGIC,
         version: *b"1.0",
         format: 4,
         entry: 0,
@@ -348,7 +360,7 @@ fn create_s5l(buf: &[u8], args: &Args, outpath: &str) {
 fn create_img2(buf: &[u8], args: &Args) -> Vec<u8> {
     let mut newimg: Vec<u8> = Vec::new();
     let mut objh = IMG2Header {
-        magic:           *b"2gmI",
+        magic:           IMG2_HEADER_CIGAM,
         img_type:        [0; 4],
         revision:        0,
         sec_epoch:       3,
@@ -404,7 +416,7 @@ fn parse_s5l(file: &[u8], args: &Args) {
     }
     
     let mut is_valid = true;
-    if &head.platform == b"8900" {
+    if head.platform == S5L8900_HEADER_MAGIC {
         if let Some(path) = &args.savesigpath {
             write_file(path, &file[0x800 + head.footer_sig_off as usize..0x800 + head.footer_cert_off as usize]);
         }
@@ -520,7 +532,7 @@ fn parse_s5l(file: &[u8], args: &Args) {
 }
 
 fn parse_img2(file: &[u8], args: &Args, is_valid: &mut bool) {
-    if &file[0..4] != IMG2_HEADER_CIGAM { return }
+    if file[0..4] != IMG2_HEADER_CIGAM { return }
     let head = cast_struct!(IMG2Header, file);
     if args.all {
         println!("IMG2 Header:\
@@ -638,14 +650,7 @@ fn checkvalid_decry(buf: &[u8], expected: u32, ext: bool) -> Option<Vec<u8>> {
         if !ext {
             let lzsstr = cast_struct!(LZSSHead, buf);
             assert_eq!(&lzsstr.comp_data[0..4], b"\xFF\xCE\xFA\xED");
-            let mut decompdata = Vec::with_capacity(lzsstr.decomp_len as usize);
-            lzss_decode_block_content(
-                &mut Cursor::new(&lzsstr.comp_data), 
-                lzsstr.comp_len as u64, 
-                &mut decompdata
-            ).unwrap_or_else(|e| panic!("Unable to decompress kernelcache: {}", e));
-            assert_eq!(decompdata.len(), lzsstr.decomp_len as usize);
-            return Some(decompdata);
+            return Some(decomp_lzss(&lzsstr.comp_data, lzsstr.comp_len, lzsstr.adler32).unwrap_or_else(|| panic!("Failed to decompress kernelcache")));
         }
     } else if (&buf[range_size(0x400, 2)] == b"H+"  //kHFSPlusSigWord
             || &buf[range_size(0x400, 2)] == b"HX") //kHFSXSigWord
@@ -653,7 +658,7 @@ fn checkvalid_decry(buf: &[u8], expected: u32, ext: bool) -> Option<Vec<u8>> {
         println!("Found ramdisk");
     } else if &buf[range_size(0x200, 5)] == b"iBoot" && iboottags.contains(&expected) {
         println!("Found iBoot");
-    } else if &buf[0..=7] == b"iBootIm" && imagetags.contains(&expected) { //
+    } else if &buf[0..7] == b"iBootIm" && imagetags.contains(&expected) { //
         println!("Found iBoot image");
     } else {
         println!("The image may be decrypted with the wrong key or this program does not know this type of image yet. Saving file anyways...");
@@ -661,7 +666,7 @@ fn checkvalid_decry(buf: &[u8], expected: u32, ext: bool) -> Option<Vec<u8>> {
     None
 }
 
-fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
+fn parse_img3(mut file: Vec<u8>, args: &Args) {
     let mut head = cast_struct!(IMG3ObjHeader, &file);
     if args.all {
         println!("IMG3 Object Header:\
@@ -697,23 +702,23 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                      &taghead.skip_dist, 
                      &taghead.buf_len);
             println!("\tTag type: {} ({})", tag, match tag.as_str() {
-                "DATA" => String::from("Data"),
-                "SHSH" => String::from("Signed Hash"),
-                "CERT" => String::from("Certificate Chain"),
-                "VERS" => String::from("Version"),
-                "SEPO" => String::from("Security Epoch"),
-                "SDOM" => String::from("Security Domain"),
-                "PROD" => String::from("Production Status"),
-                "CHIP" => String::from("Chip Type"),
-                "BORD" => String::from("Board Type"),
-                "ECID" => String::from("Unique ID"),
-                "SALT" => String::from("Random Pad"),
-                "TYPE" => String::from("Type"),
-                "OVRD" => String::from("Override"),
-                "CEPO" => String::from("Hardware Epoch"),
-                "NONC" => String::from("Nonce"),
-                "KBAG" => String::from("Keybag"),
-                x => format!("Unknown Tag {x:?}")
+                "DATA" => Cow::from("Data"),
+                "SHSH" => Cow::from("Signed Hash"),
+                "CERT" => Cow::from("Certificate Chain"),
+                "VERS" => Cow::from("Version"),
+                "SEPO" => Cow::from("Security Epoch"),
+                "SDOM" => Cow::from("Security Domain"),
+                "PROD" => Cow::from("Production Status"),
+                "CHIP" => Cow::from("Chip Type"),
+                "BORD" => Cow::from("Board Type"),
+                "ECID" => Cow::from("Unique ID"),
+                "SALT" => Cow::from("Random Pad"),
+                "TYPE" => Cow::from("Type"),
+                "OVRD" => Cow::from("Override"),
+                "CEPO" => Cow::from("Hardware Epoch"),
+                "NONC" => Cow::from("Nonce"),
+                "KBAG" => Cow::from("Keybag"),
+                x => Cow::from(format!("Unknown Tag {x:?}"))
             });
         }
         //println!("{:x?}", taghead.tag);
@@ -727,8 +732,8 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                     vershead.str_bytes = vers.clone();
                     vershead.str_len = vershead.str_bytes.len() as u32;
                     struct_write!(vershead, taghead.buf);
-                    let buf = &taghead.buf.clone();
-                    do_resize(&mut taghead, &mut file, i, vershead.str_len + 4, buf);
+                    let buf = taghead.buf.clone();
+                    do_resize(&mut head, &mut taghead, &mut file, i, vershead.str_len + 4, buf);
                     println!("Version is: {vers}", vers=vershead.str_bytes);
                 }
             }, "TYPE" => {
@@ -761,7 +766,7 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                     });
                     let ksize = (&keyhead.key_size/8) as usize;
                     println!("\tKey size: AES{}", ksize*8);
-                    println!("\tIV: {iv}", iv=hex::encode(&keyhead.iv_bytes));
+                    println!("\tIV: {iv}", iv=hex::encode(keyhead.iv_bytes));
                     println!("\tKey: {key}", key=hex::encode(&keyhead.key_bytes[..ksize]));
                 } else if args.keybags {
                     println!("Key type: {}", match keyhead.selector {
@@ -770,7 +775,7 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                         2 => String::from("Development"),
                         x => format!("Unknown ({x:x})")
                     });
-                    println!("IV: {iv}", iv=hex::encode(&keyhead.iv_bytes));
+                    println!("IV: {iv}", iv=hex::encode(keyhead.iv_bytes));
                     println!("Key: {key}", key=hex::encode(&keyhead.key_bytes[..(&keyhead.key_size/8) as usize]));
                 } else if let Some(kbg) = &args.setkbag {
                     assert_eq!(kbg.len(), 3);
@@ -848,7 +853,7 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                 } else if let Some(certpath) = &args.certpath {
                     let certfile = fs::read(certpath).unwrap();
                     let taglen = 12 + (taghead.buf.len() + taghead.pad.len()) as u32;
-                    do_resize(&mut taghead, &mut file, i, taglen, &certfile);
+                    do_resize(&mut head, &mut taghead, &mut file, i, taglen, certfile);
                 }
 
                 if args.verify {
@@ -856,10 +861,12 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                     let mut is_valid = true;
                     let check = u16::from_be_bytes(taghead.buf[range_size(i, 2)].try_into().unwrap());
                     if check == 0x3082 {
+                        let mut deridx = 0;
                         let mut certs: Vec<X509> = Vec::new();
                         while i < taghead.buf.len() {
                             let check = u16::from_be_bytes(taghead.buf[range_size(i, 2)].try_into().unwrap());
                             assert_eq!(check, 0x3082);
+                            deridx = i;
                             let len = u16::from_be_bytes(taghead.buf[range_size(i + 2, 2)].try_into().unwrap()) as usize;
                             certs.push(X509::from_der(&taghead.buf[range_size(i, 4 + len)]).unwrap());
                             i += 4 + len;
@@ -881,16 +888,48 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                     
                         let leafcert = &certs[certs.len()-1];
 
-                        //CFTypeRef kSecOIDAPPLE_EXTENSION_APPLE_SIGNING = CFSTR("1.2.840.113635.100.6.1.1");
-                        //rust's OpenSSL does not implement searching using OID, use memmem instead
-                        let haystack = leafcert.to_der().unwrap();
-                        if let Some(off) = find(&haystack, b"3gmI") {
-                            if args.all {
+                        unsafe {
+                            /* 
+                            * openssl crate does not implement the below functions, 
+                            * use unsafe to call the openssl_sys versions ourselves and check for errors 
+                            */
+                            use openssl_sys::{
+                                OBJ_create, NID_undef,
+                                d2i_X509, X509_free, X509_get_ext_by_NID, X509_get_ext, 
+                                X509_EXTENSION_get_data,
+                                ASN1_STRING, ASN1_STRING_length, ASN1_STRING_get0_data
+                            };
+                            use std::{
+                                ffi::CString,
+                                ptr::{null_mut, addr_of_mut},
+                                slice::from_raw_parts
+                            };
+
+                            let mut x509_loc_ptr = taghead.buf[deridx..].as_ptr();
+                            let unsafe_x509_cert = d2i_X509(null_mut(), addr_of_mut!(x509_loc_ptr), taghead.buf[deridx..].len() as i64);
+                            assert!(!unsafe_x509_cert.is_null(), "Failed to parse X509");
+
+                            //CFTypeRef kSecOIDAPPLE_EXTENSION_APPLE_SIGNING = CFSTR("1.2.840.113635.100.6.1.1");
+                            let as_oid   = CString::new("1.2.840.113635.100.6.1.1").unwrap();
+                            let as_short = CString::new("APPLE_SIGNING").unwrap();
+                            let as_long  = CString::new("APPLE_EXTENSION_APPLE_SIGNING").unwrap();
+                            let as_nid = OBJ_create(as_oid.as_ptr(), as_short.as_ptr(), as_long.as_ptr());
+                            assert!(as_nid != NID_undef, "Failed to create NID");
+
+                            let nid_idx = X509_get_ext_by_NID(unsafe_x509_cert, as_nid, -1);
+                            if nid_idx != -1 {
                                 println!("Found Apple certificate signing extension, parsing it");
-                                let img3 = cast_struct!(IMG3ObjHeader, &haystack[off..]);
-                                parse_img3(haystack[range_size(off, img3.skip_dist as usize)].to_vec(), args, argc);
+                                let ext     = X509_get_ext(unsafe_x509_cert, nid_idx);
+                                assert!(!ext.is_null(), "Failed to get extension");
+                                
+                                let val     = X509_EXTENSION_get_data(ext) as *const ASN1_STRING; // infallable according to docs
+                                let len     = ASN1_STRING_length(val);    // infallable according to docs
+                                let dataptr = ASN1_STRING_get0_data(val); // infallable according to docs
+                                let slice_to_img3 = from_raw_parts(dataptr, len.try_into().unwrap());
+                                parse_img3(slice_to_img3[2..].to_vec(), args); // skip 2 bytes because those encode the length
                             }
-                        };
+                            X509_free(unsafe_x509_cert);
+                        } //end unsafe
 
                         let leafpub = leafcert.public_key().unwrap();
                         let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
@@ -934,16 +973,30 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                 }
             }, "DATA" => {
                 data = i;
+
+                if let Some(datapath) = &args.setdata {
+                    let mut datafile = fs::read(datapath).unwrap();
+                    if args.comp {
+                        let lzsscomp = comp_lzss(&datafile);
+                        let compsz = lzsscomp.len();
+                        let lzsshead = create_complzss_header(&datafile, lzsscomp);
+                        struct_write!(lzsshead, datafile);
+                        datafile.truncate(384 + compsz);
+                    }
+                    let taglen = 12 + (taghead.buf.len() + taghead.pad.len()) as u32;
+                    do_resize(&mut head, &mut taghead, &mut file, i, taglen, datafile);
+                }
+
                 if let (Some(key), Some(path)) = (&args.key, &args.outfile) {  
                     let padded = [taghead.buf, taghead.pad.clone()].concat(); //this might not be necessary
                     let mut key = key.clone();
-                    let iv: String = (&args.iv).clone().unwrap_or_else(|| {
+                    let iv: String = args.iv.clone().unwrap_or_else(|| {
                         let ret = key[..32].to_string();
                         key = key[32..].to_string();
                         ret
                     });
                     let key_bytes: &[u8] = &hex::decode(key.as_bytes()).unwrap();
-                    let iv_bytes: &[u8] = &hex::decode(iv.as_bytes()).unwrap();
+                    let iv_bytes:  &[u8] = &hex::decode(iv.as_bytes()).unwrap();
                     
                     let cipher = match key.len() {
                         32 => Cipher::aes_128_cbc(),
@@ -964,31 +1017,33 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                         &padded, 
                         &mut buf
                     ).unwrap();
-                    decrypter.finalize(&mut buf).unwrap();
+                    decrypter.finalize(&mut buf).unwrap_or_else(|e| {
+                        use std::io::Write;
+                        println!("Got a error whilst finalizing the decryption: \"{}\"", e);
+                        print!("This can sometimes still contain valid data, continue? [y/N]: ");
+                        std::io::stdout().flush().unwrap();
+                        let mut opt = String::new();
+                        std::io::stdin().read_line(&mut opt).unwrap();
+                        if opt.trim() != "y" { 
+                            std::process::exit(1); 
+                        } else {
+                            0
+                        }
+                    });
                     buf.truncate(count);
                     
                     if args.dec {
                         taghead.buf = buf.clone();
                         struct_write!(taghead, file[i..]);
                     } else {
-                        if let Some(data) = checkvalid_decry(&buf, head.img3_type, args.ext) {
-                            write_file(path, &data);
-                        } else {
-                            write_file(path, &buf);
-                        }
+                        write_file(path, &checkvalid_decry(&buf, head.img3_type, args.ext).unwrap_or(buf));
                         exit(0);
                     }
                 } else if let Some(path) = &args.outfile {
-                    if let Some(data) = checkvalid_decry(&taghead.buf, head.img3_type, args.ext) {
-                        write_file(path, &data);
-                    } else {
-                        write_file(path, &taghead.buf);
+                    if args.setdata.is_none() {
+                        write_file(path, &checkvalid_decry(&taghead.buf, head.img3_type, args.ext).unwrap_or(taghead.buf));
+                        exit(0);
                     }
-                    exit(0);
-                } else if let Some(datapath) = &args.setdata {
-                    let datafile = fs::read(datapath).unwrap();
-                    let taglen = 12 + (taghead.buf.len() + taghead.pad.len()) as u32;
-                    do_resize(&mut taghead, &mut file, i, taglen, &datafile);
                 }
             }, "SHSH" => {
                 if let Some(path) = &args.savesigpath {
@@ -996,7 +1051,7 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
                 } else if let Some(sigpath) = &args.sigpath {
                     let hashfile = fs::read(sigpath).unwrap();
                     let taglen = 12 + (taghead.buf.len() + taghead.pad.len()) as u32;
-                    do_resize(&mut taghead, &mut file, i, taglen, &hashfile);
+                    do_resize(&mut head, &mut taghead, &mut file, i, taglen, hashfile);
                 }
                 shshdata = taghead.buf;
             }, _ => { //assume number
@@ -1023,7 +1078,8 @@ fn parse_img3(mut file: Vec<u8>, args: &Args, argc: usize) {
 
 fn main() {
     let args = Args::parse();
-    let argc = env::args().count();
+    
+    let mut is_valid = true;
     let fw: Vec<u8> = fs::read(&args.filename).unwrap_or_else(|e| panic!("Cannot read image, error: {e}"));
     if let Some(create) = &args.create {
         if let Some(op) = &args.outfile {
@@ -1041,7 +1097,8 @@ fn main() {
             S5L8720_HEADER_MAGIC |
             S5L8900_HEADER_MAGIC => parse_s5l(&fw, &args), //8900 / 8970
             IMG2_SB_HEADER_MAGIC => parse_img2sb(&fw, &args), //IMG2
-            IMG3_HEADER_CIGAM => parse_img3(fw, &args, argc), //Img3 in le
+            IMG2_HEADER_CIGAM => parse_img2(&fw, &args, &mut is_valid),
+            IMG3_HEADER_CIGAM => parse_img3(fw, &args), //Img3 in le
             x => panic!("Unknown image type with magic: {x:02x?}")
         }
     };
