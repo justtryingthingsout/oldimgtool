@@ -105,9 +105,9 @@ pub fn do_resize(mainhead: &mut IMG3ObjHeader, head: &mut IMG3TagHeader, file: &
     head.pad.resize(newlen % 4, 0); //needs to be on a 4 byte boundary
     let newpad = head.pad.len();
     if oldpad > newpad {
-        file.drain(range_size(off + 12 + head.buf_len as usize + newpad, (oldpad - newpad) as usize));
+        file.drain(range_size(off + 12 + head.buf_len as usize + newpad, oldpad - newpad));
     } else if newbuf > oldbuf {
-        file.splice(range_size(off + 12 + oldpad as usize, 0), vec![0; (newpad - oldpad) as usize]);
+        file.splice(range_size(off + 12 + oldpad, 0), vec![0; newpad - oldpad]);
     }
     head.skip_dist = 12 + newbuf + newpad as u32 - 1;
     let chg = oldbuf - newbuf;

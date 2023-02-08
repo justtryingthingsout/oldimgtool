@@ -12,7 +12,7 @@ pub fn create_complzss_header(data: &[u8], comp_data: Vec<u8>) -> LZSSHead {
     let adler32 = unsafe { 
         //SAFETY: so long as data.len() is <= to the actual data size, this should be safe, undefined behavior otherwise
         local_adler32(datptr, data.len().try_into().unwrap())
-    } as u32;
+    };
     LZSSHead {
         magic: *b"complzss",
         adler32,
@@ -28,7 +28,7 @@ pub fn decomp_lzss(data: &[u8], len: u32, adler32: u32) -> Option<Vec<u8>> {
     let mut decmpvec = Vec::with_capacity(len as usize);
     let sz: u32 = unsafe { decompress_lzss(decmpvec.as_mut_ptr(), len, data.as_ptr(), data.len() as u32) }.try_into().unwrap();
     assert!(sz <= len, "LZSS compress wrote beyond allocated buffer"); //program is no longer stable, crash (this should never happen)
-    if unsafe { local_adler32(decmpvec.as_ptr(), len.try_into().unwrap()) } as u32 != adler32 { 
+    if unsafe { local_adler32(decmpvec.as_ptr(), len.try_into().unwrap()) } != adler32 { 
         None
     } else {
         Some(decmpvec)

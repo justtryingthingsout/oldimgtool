@@ -8,7 +8,8 @@
     clippy::struct_excessive_bools,   //arguments struct, can't change much
     clippy::wildcard_imports,         //too many imports to specify every one
     clippy::module_name_repetitions,  //lzss module, makes functions name more clear
-    clippy::comparison_chain          //I don't want a exhaustive match, also it may be slower
+    clippy::comparison_chain,         //I don't want a exhaustive match, also it may be slower
+    clippy::similar_names             //as_nid vs as_oid
 )]
 
 use clap::Parser;
@@ -202,7 +203,7 @@ fn create_img3(mut buf: Vec<u8>, args: &Args, outpath: &str) {
         }
         let mut key_bytes = hex::decode(&kbg[1]).unwrap();
         if key_bytes.len() != kbg[0].len() {
-            let need = kbg[0].len() as usize - key_bytes.len() + 1;
+            let need = kbg[0].len() - key_bytes.len() + 1;
             key_bytes.resize(need, 0);
         }
 
@@ -620,7 +621,7 @@ fn parse_img2(file: &[u8], args: &Args, is_valid: &mut bool) {
 fn parse_img2sb(file: &[u8], args: &Args) {
     let head = cast_struct!(IMG2Superblock, file);
     if args.all {
-        println!("IMG2 SuperBlock Header: {:#?}", head);
+        println!("IMG2 SuperBlock Header: {head:#?}");
     }
 }
 
@@ -1019,7 +1020,7 @@ fn parse_img3(mut file: Vec<u8>, args: &Args) {
                     ).unwrap();
                     decrypter.finalize(&mut buf).unwrap_or_else(|e| {
                         use std::io::Write;
-                        println!("Got a error whilst finalizing the decryption: \"{}\"", e);
+                        println!("Got a error whilst finalizing the decryption: \"{e}\"");
                         print!("This can sometimes still contain valid data, continue? [y/N]: ");
                         std::io::stdout().flush().unwrap();
                         let mut opt = String::new();
@@ -1061,7 +1062,7 @@ fn parse_img3(mut file: Vec<u8>, args: &Args) {
                     if numstr.is_empty() {
                         numstr = "0";
                     }
-                    println!("\tValue: 0x{}", numstr);
+                    println!("\tValue: 0x{numstr}");
                 }
             }
         }
