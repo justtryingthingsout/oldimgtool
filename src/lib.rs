@@ -17,7 +17,7 @@ pub mod img3;
 pub mod superblock;
 
 #[derive(Parser, Debug, Clone)]
-#[clap(author="@plzdonthaxme", version="1.1", about="A IMG1/2/3 parser, made in Rust", disable_version_flag=true)]
+#[clap(author="@plzdonthaxme", version="1.1", about="A IMG1/2/3 and NOR parser, made in Rust", disable_version_flag=true)]
 pub struct Args {
     //main args
     #[clap(help="Input filename", value_name="INPUT")]
