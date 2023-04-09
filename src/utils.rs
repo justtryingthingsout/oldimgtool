@@ -105,7 +105,7 @@ pub fn write_file(path: &str, arr: &[u8]) {
 /// # Panics
 /// Panics if the bytes are not valid utf8
 #[must_use] pub fn revstr_from_le_bytes(arr: &[u8]) -> String {
-    from_utf8(arr).unwrap_or_else(|_| panic!("{:?}", arr)).chars().rev().collect::<String>()
+    from_utf8(arr).unwrap_or_else(|_| panic!("{arr:?}")).chars().rev().collect::<String>()
 }
 
 pub fn print_unknown_val(args: &crate::Args, taghead: &IMG3TagHeader) {
@@ -256,10 +256,10 @@ pub const kHFSXSigWord: &[u8; 2] = b"HX";
 }
 
 #[must_use] pub fn override_types(value: u32) -> String {
-    if value & (1 << 0) != 0 {
-        String::from("Production override")
-    } else {
+    if value & (1 << 0) == 0 {
         String::from("No override")
+    } else {
+        String::from("Production override")
     }
 }
 

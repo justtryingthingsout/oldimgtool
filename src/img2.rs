@@ -81,7 +81,7 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
                 println!("{exthead}");
             }
             if !args.all && args.ver {
-                println!("Version string: {}", from_utf8(&exthead.data).unwrap())
+                println!("Version string: {}", from_utf8(&exthead.data).unwrap());
             }
             if args.verify {
                 println!("Extension Header \"{}\" CRC32 is {}", 
@@ -140,7 +140,7 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
             opt: 0,
             data: fr,
         };
-        objh.extsize = ext.data.len() as u32;
+        objh.extsize = cast_force!(ext.data.len(), u32);
         struct_write!(ext, newimg[0x68..]);
         ext.check = hash(&newimg[range_size(0x6C, 12+ext.data.len())]);
         struct_write!(ext, newimg[0x68..]);

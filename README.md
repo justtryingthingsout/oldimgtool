@@ -55,8 +55,10 @@ Verifying a image's integrity and output the image's type:
 
 ## Building
 First, install `cargo` if you haven't already, instructions are [here](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+
 Then, clone this repository and `cd` into it.
-Finally, run `cargo install --path .`, and finally use it with `oldimgtool`.
+
+Finally, run `cargo install --path .`, and use it with `oldimgtool`.
 
 ## Credits
 * iphone-dataprotection for the IMG3 SHSH verifier logic

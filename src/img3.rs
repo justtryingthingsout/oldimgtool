@@ -146,7 +146,7 @@ fn cert_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
                         if let Some(board) = &devinfo.bdid {
                             s.push(format!("\tBoard ID{}: {board}", 
                                 if board.len() > 1 {"s"} else {""},
-                                board=board.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
+                                board=board.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
                             ));
                         }   
                         if let Some(chip) = &devinfo.cpid {
@@ -575,8 +575,8 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
             file.splice(0x14+head.signed_len as usize.., blob.to_vec());
             let oldsign = head.signed_len;
             head.signed_len += ecidlen;
-            head.buf_len = oldsign + blob.len() as u32;
-            head.skip_dist = oldsign + blob.len() as u32 + 0x14;
+            head.buf_len = oldsign + cast_force!(blob.len(), u32);
+            head.skip_dist = oldsign + cast_force!(blob.len(), u32) + 0x14;
             struct_write!(head, file[0..]);
         }
     }
