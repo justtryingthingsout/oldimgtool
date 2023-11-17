@@ -7,7 +7,7 @@ use std::path::PathBuf;
 fn main() {
     cc::Build::new()
         .file("src/ext/compression.c")
-        .flag("-Wno-unused-function")
+        .flag_if_supported("-Wno-unused-function")
         .compile("lzss");
 
     // Tell cargo to invalidate the built crate whenever the wrapper changes

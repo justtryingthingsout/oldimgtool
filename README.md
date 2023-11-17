@@ -60,6 +60,12 @@ Then, clone this repository and `cd` into it.
 
 Finally, run `cargo install --path .`, and use it with `oldimgtool`.
 
+### Note for Windows
+In order to get the program to compile, you may need to:
+* Install LLVM as shown [here](https://rust-lang.github.io/rust-bindgen/requirements.html#windows)
+* Install a OpenSSL binary from [here](https://wiki.openssl.org/index.php/Binaries)
+* Point the OpenSSL installation path to the environmental variable `OPENSSL_DIR` if the installer didn't already
+
 ## Credits
 * iphone-dataprotection for the IMG3 SHSH verifier logic
 * freemyipod for information about the IMG1 structure

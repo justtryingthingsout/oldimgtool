@@ -4,6 +4,7 @@
     clippy::too_many_lines,           // refactor required but not now
     clippy::struct_excessive_bools,   // arguments struct, can't change much
     clippy::wildcard_imports,         // this is only done for my own crates, others are specified
+    clippy::too_many_arguments        // don't know what to do with the arguments, they are required
 )]
 
 use clap::Parser;
@@ -24,8 +25,6 @@ pub struct Args {
     pub filename: String,
     #[clap(help="Output filename", value_name="OUTPUT")]
     pub outfile: Option<String>,
-    #[clap(short, help="Output all info about the image")]
-    pub all: bool,
     #[clap(short='v', long, help="Verify the image")]
     pub verify: bool,
     #[clap(long, help="Specify iv for decryption")]
@@ -42,6 +41,8 @@ pub struct Args {
     pub img2: bool,
 
     //getters
+    #[clap(short, help="Output all info about the image")]
+    pub all: bool,
     #[clap(long, help="Print version (IMG2/IMG3)", help_heading="GETTERS")]
     pub ver: bool,
     #[clap(short='b', help="Output keybags (IMG3 only)", help_heading="GETTERS")]

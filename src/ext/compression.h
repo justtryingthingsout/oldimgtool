@@ -26,6 +26,14 @@
 
 #include <stdlib.h>
 
+// Include data types for x-compilation to Windows
+#if defined(_WIN32)
+    #include <stdint.h>
+    typedef uint32_t u_int32_t;
+    typedef uint8_t u_int8_t;
+    #define bzero(b,len) memset((b), '\0', (len))
+#endif
+
 u_int32_t local_adler32(
     const u_int8_t * buffer,
     int32_t    length);

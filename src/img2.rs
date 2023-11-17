@@ -27,12 +27,7 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
 
     if let Some(path) = &args.outfile {
         if !args.dec && !args.img2 {
-            let dataoff = 0x68 + //IMG2 header size
-                          if head.opts & IMG2_OPT_EXTENSION_PRESENT == 0 {0} else {
-                            0x10 + //Extension header size
-                            head.extsize as usize + //Extension data size
-                            0x1 //Pad (0xFF byte)
-                          } + 0x378; //Padding
+            let dataoff = 0x400;
             if let Some(ref key) = key {
                 if head.opts & IMG2_OPT_ENCRYPTED_IMAGE != 0 {
                     let cipher = Cipher::aes_128_cbc();
@@ -67,12 +62,34 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
                     "incorrect".red()
                 }
         );
+
+        /*
+            Data signature cannot be verified without a UID encrypted IMG2 Verify key
+            The verify key is 
+                {0xCD, 0xF3, 0x45, 0xB3, 0x12, 0xE7, 0x48, 0x85, 0x8B, 0xBE, 0x21, 0x47, 0xF0, 0xE5, 0x80},
+            encrypted with the UID, with the IV as 
+                {0x41, 0x70, 0x5D, 0x11, 0x6F, 0x98, 0x4B, 0x82, 0x9C, 0x6C, 0x99, 0xBB, 0xA5, 0xF1, 0x78, 0x69}.
+
+            Once encrypted, the signature can be verified by 
+                1. taking a SHA1 digest of 0x400 ~ 0x400 + data size
+                2. padding it with the IMG2 Hash Padding, which is 
+                    { 0xAD, 0x2E, 0xE3, 0x8D, 0x2D, 0x9B, 0xE4, 0x35, 0x99, 4,
+					  0x44, 0x33, 0x65, 0x3D, 0xF0, 0x74, 0x98, 0xD8, 0x56, 0x3B,
+					  0x4F, 0xF9, 0x6A, 0x55, 0x45, 0xCE, 0x82, 0xF2, 0x9A, 0x5A,
+					  0xC2, 0xBC, 0x47, 0x61, 0x6D, 0x65, 0x4F, 0x76, 0x65, 0x72,
+					  0xA6, 0xA0, 0x99, 0x13 }, until the buffer is 0x40 bytes long
+                3. Encrypting the SHA1 digest with the UID encrypted IMG2 Verify key
+                4. Comparing it against the signature
+
+            The same can be done for the 0x20 byte long hash at 0x3E0 (except padding only to 0x20), 
+            which is the hash of 0 ~ 0x3E0.
+        */
     }
     
     let mut extoff = 0x68;
     let mut extsize: usize = head.extsize as usize;
     if head.opts & IMG2_OPT_EXTENSION_PRESENT != 0 || head.extsize != 0xFFFF_FFFF {
-        if head.extsize != 0xFFFF_FFFF && (args.verify || args.all) {
+        if head.opts & IMG2_OPT_EXTENSION_PRESENT == 0 && (args.verify || args.all) {
             println!("Extension header found even through extension option is not set. Will parse anyways...");
         }
         loop {
@@ -115,16 +132,13 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
     let mut objh = IMG2Header {
         magic:           IMG2_HEADER_CIGAM,
         img_type:        type_4cc,
-        revision:        0,
         sec_epoch:       3,
         load_addr:       0x1800_0000,
         data_size:       cast_force!(buf.len(), u32),
         decry_data_size: cast_force!(buf.len(), u32),
         alloc_size:      u32::MAX,
-        opts:            0,
-        sig_data:        [0; 0x40],
         extsize:         u32::MAX,
-        header_crc32:    0,
+        ..Default::default()
     };
 
     if let Some(imgtype) = &args.settype {
@@ -134,11 +148,10 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
     if let Some(ver) = &args.setver {
         let fr = ver.as_bytes().to_owned();
         let mut ext = IMG2ExtHeader {
-            check: 0,
             next_size: u32::MAX,
             ext_type: *b"vers",
-            opt: 0,
             data: fr,
+            ..Default::default()
         };
         objh.extsize = cast_force!(ext.data.len(), u32);
         struct_write!(ext, newimg[0x68..]);

@@ -23,23 +23,15 @@ use {
 
 /// # Panics
 /// Panics if the input file is not a valid IMG1 file
-pub fn create(buf: &[u8], args: &Args, outpath: &str) {
+pub fn create(buf: &[u8], args: &Args) {
     let mut newimg: Vec<u8> = Vec::new();
     let mut objh = S5LHeader {
         platform: S5L8900_HEADER_MAGIC,
         version: IMG1_FORMAT_1,
         format: 4,
-        entry: 0,
-        size_of_data: 0,
-        footer_sig_off: 0,
-        footer_cert_off: 0,
-        footer_cert_len: 0,
         salt: [0; 0x20],
-        unknown2: 0,
         epoch: 3,
-        unencrypted_sig: [0; 4],
-        header_signature: [0; 0x10],
-        _pad: [0; 0x7B0],
+        ..Default::default()
     };
 
     let (mut sig, mut cert) = (None, None);
@@ -85,7 +77,7 @@ pub fn create(buf: &[u8], args: &Args, outpath: &str) {
     if let Some(cert) = cert {
         newimg.extend_from_slice(&cert);
     }
-    write_file(outpath, &newimg);
+    write_file(args.outfile.as_ref().unwrap(), &newimg);
 }
 
 /// # Panics
@@ -103,8 +95,12 @@ pub fn parse(file: &[u8], args: &Args) {
     let cipher = Cipher::aes_128_cbc();
     let datstart = if head.platform == S5L8900_HEADER_MAGIC || head.platform == S5L8702_HEADER_MAGIC {
         0x800
-    } else {
+    } else if head.platform == S5L8720_HEADER_MAGIC || head.platform == S5L8730_HEADER_MAGIC {
         0x600
+    } else if head.platform == S5L8723_HEADER_MAGIC || head.platform == S5L8740_HEADER_MAGIC {
+        0x400
+    } else {
+        0x200 //idk
     };
 
     if let Some(path) = &args.savesigpath {
@@ -189,7 +185,7 @@ pub fn parse(file: &[u8], args: &Args) {
                          "incorrect".red()
                      }
             );
-        } else {
+        } else if head.unencrypted_sig != [0; 4] {
             println!("Entire S5L header signature cannot be verified without decryption, but trying with unencrypted left over signature anyways...");
             let mut sha1 = Sha1::new();
             sha1.update(&file[0..0x40]);
@@ -202,55 +198,47 @@ pub fn parse(file: &[u8], args: &Args) {
                          "incorrect".red()
                      }
             );
-        }
-
-        let mut i = head.footer_cert_off as usize + datstart;
-        let mut certs: Vec<X509> = Vec::new();
-        while i < datstart + (head.footer_cert_off + head.footer_cert_len) as usize  {
-            let check = u16::from_be_bytes(file[range_size(i, 2)].try_into().unwrap());
-            assert_eq!(check, 0x3082);
-            let len = u16::from_be_bytes(file[range_size(i + 2, 2)].try_into().unwrap()) as usize;
-            certs.push(X509::from_der(&file[range_size(i, 4 + len)]).unwrap());
-            i += 4 + len;
-        }
-
-        let mut certiter = certs.iter().enumerate();
-        println!("Assuming \"{}\" is trusted", get_cn(certiter.next().unwrap().1));
-
-        for (j, cert) in certiter {
-            let cn = get_cn(cert);
-            match cert.verify(&certs[j - 1].public_key().unwrap()) {
-                Ok(_) => println!("Certificate \"{cn}\" is {}", "valid".green()),
-                Err(e) => {
-                    println!("{} verification of \"{cn}\" with error: {e}", "Failed".red());
-                    is_valid = false;
-                },
-            }
-        }
-
-        if datstart + head.footer_sig_off as usize == file.len() {
-            println!("No image signature to verify, assuming it is valid");
         } else {
-            let leafpub = certs[certs.len()-1].public_key().unwrap();
-            let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
-            verifier.set_rsa_padding(Padding::PKCS1).unwrap();
-            verifier.update(&file[0..datstart + head.size_of_data as usize]).unwrap();
-            let ok = verifier.verify(&file[range_size(datstart + head.footer_sig_off as usize, 0x80)]).unwrap();
-            println!("S5L file signature {}", 
-                if ok {
-                    "matches".green()
-                } else {
-                    is_valid = false;
-                    "does not match".red()
-                }
-            );
+            println!("S5L header signature cannot be verified");
         }
-        println!("This image is {}", 
-                if is_valid {
-                    "valid".green()
-                } else {
-                    "invalid".red()
-                }
-        );
+
+        let i = head.footer_cert_off as usize + datstart;
+        let check = Sequence::from_der(&file[i..]);
+        if check.is_ok() {
+            let leafcert = verify_cert(&file[range_size(i, head.footer_cert_len as usize)], &mut is_valid);
+
+            let sig_off = if (datstart + head.footer_sig_off as usize) < file.len() {
+                datstart + head.footer_sig_off as usize //8900 case
+            } else if head.size_of_data != head.footer_cert_off {
+                datstart + head.size_of_data as usize //newer iPod case
+            } else { 0 }; //has never happened before but might
+
+            if sig_off == 0 {
+                println!("No image signature to verify, assuming it is valid");
+            } else {
+                let leafpub = leafcert.public_key().unwrap();
+                let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
+                verifier.set_rsa_padding(Padding::PKCS1).unwrap();
+                verifier.update(&file[0..datstart + head.size_of_data as usize]).unwrap();
+                let ok = verifier.verify(&file[range_size(sig_off, 0x80)]).unwrap();
+                println!("S5L file signature {}", 
+                    if ok {
+                        "matches".green()
+                    } else {
+                        is_valid = false;
+                        "does not match".red()
+                    }
+                );
+            }
+            println!("This image is {}", 
+                    if is_valid {
+                        "valid".green()
+                    } else {
+                        "invalid".red()
+                    }
+            );
+        } else {
+            println!("Found cert section with invalid certificates, skipping verification");
+        }
     }
 }

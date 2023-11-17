@@ -18,31 +18,24 @@ fn main() {
     let mut is_valid = true;
     let fw: Vec<u8> = fs::read(&args.filename).unwrap_or_else(|e| panic!("Cannot read image, error: {e}"));
     if let Some(create) = &args.create {
-        if let Some(op) = &args.outfile {
-            let outpath = op.clone();
+        if args.outfile.is_some() {
             match create.as_str() {
-                "S5L"  => img1::create(&fw, &args, &outpath),
-                "IMG3" => img3::create(fw, &args, &outpath),
+                "S5L"  => img1::create(&fw, &args),
+                "IMG3" => img3::create(fw, &args),
                 x => panic!("Invalid image type: {x}")
             }
         } else {
             panic!("No output file specified");
         }
     } else { 
-        let key = match args.key {
-            Some(ref k) => {hex::decode(k).ok()},
-            None => None
-        };
+        let key = args.key.as_ref().and_then(|k| hex::decode(k).ok());
         if fw.len() > 0x8404 && fw[0x8400..0x8404] == IMG2_SB_HEADER_CIGAM {
             superblock::parse(&fw, &args); //IMG2
             return;
         };
         match fw[..4].try_into().unwrap() {
-            S5L8702_HEADER_MAGIC |
-            S5L8720_HEADER_MAGIC |
-            S5L8730_HEADER_MAGIC |
-            S5L8740_HEADER_MAGIC |
-            S5L8900_HEADER_MAGIC => img1::parse(&fw, &args),              //8900 / 8970
+            ref x if IMG1_PLATFORMS.contains(x) => // Platform as magic
+                img1::parse(&fw, &args),
             IMG2_HEADER_CIGAM => {
                 img2::parse(&fw, &args, &mut is_valid, &key); //Img2 in le
                 if args.verify {

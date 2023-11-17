@@ -15,11 +15,17 @@ pub use {
         fs::write,
         str::from_utf8,
         borrow::Cow,
-        fmt
+        fmt,
     },
     crate::lzss::*,
     binrw::BinReaderExt,
     phf::phf_map, //static map because I know all the values
+    asn1_rs::{
+        Sequence, 
+        FromDer, 
+        ToDer
+    },
+    colored::Colorize,
 };
 
 //utility macros
@@ -87,6 +93,77 @@ macro_rules! struct_write {
     .next()
     .and_then(|x| x.data().as_utf8().ok())
     .unwrap()
+}
+
+const APPLE_ROOT_CERT: &[u8; 1215] = include_bytes!("Apple_Root_CA.cer");
+
+/// # Panics
+/// Panics if certificates are invalid
+pub fn verify_cert(certbuf: &[u8], is_valid: &mut bool) -> X509 {
+    let mut certs: Vec<X509> = Vec::new();
+    let mut i = 0;
+    while i < certbuf.len()  {
+        let cert = X509::from_der(&certbuf[i..]).expect("Found invalid certificate");
+        i += cert.to_der().unwrap().len(); // this unwrap should never fail, it comes from a DER
+        certs.push(cert);
+    }
+
+    // sorting of the certificate chain because some ipod fws have it upside down
+    let mut swap = false;
+    let mut found = false;
+    // get root node
+    for i in 0..certs.len() {
+        if certs[i].issuer_name_hash() == certs[i].subject_name_hash() {
+            found = true;
+            if i != 0 {
+                swap = true;
+                certs.swap(0, i); 
+            }
+            break;
+        }
+    }
+
+    if !found {
+        certs.insert(0, X509::from_der(APPLE_ROOT_CERT).unwrap()); // some images don't have builtin root certs
+    }
+
+    if swap && certs.len() > 2 {
+        let mut last = 0;
+        // add leafs
+        while last != certs.len()-1 {
+            for i in last+1..certs.len() {
+                if certs[i].issuer_name_hash() == certs[last].subject_name_hash() {
+                    last += 1;
+                    certs.swap(i, last);
+                    break;
+                }
+            }
+        }
+    }
+
+    if found {
+        println!("Assuming \"{}\" is trusted", get_cn(&certs[0]));
+    } else {
+        println!("Using built-in Apple Root CA certificate as no root CAs were found.");
+    }
+
+    for i in 1..certs.len() { // skip root
+        let cn = get_cn(&certs[i]);
+        match certs[i].verify(&certs[i - 1].public_key().unwrap()) {
+            Ok(x) => {
+                if x {
+                    println!("Certificate \"{cn}\" is {}", "valid".green());
+                } else {
+                    println!("{} verification of \"{cn}\"", "Failed".red());
+                    *is_valid = false;
+                }
+            }, Err(e) => {
+                println!("{} verification of \"{cn}\" with error: {e}", "Failed".red());
+                *is_valid = false;
+            },
+        }
+    };
+    certs.pop().unwrap() // returns leaf
 }
 
 //write a buffer to a file with the specified path
@@ -295,7 +372,7 @@ pub static OPTMAP: phf::Map<u32, &'static str> = phf_map! {
 
 #[binrw]
 #[brw(little)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct S5LHeader {
     pub platform:         [u8; 4],
     pub version:          [u8; 3],
@@ -310,7 +387,6 @@ pub struct S5LHeader {
     pub epoch:            u16,
     pub header_signature: [u8; 0x10],
     pub unencrypted_sig:  [u8; 4],
-    pub _pad:             [u8; 0x7B0],
 }
 
 impl fmt::Display for S5LHeader {
@@ -326,8 +402,7 @@ impl fmt::Display for S5LHeader {
               \n\tFooter certificate length: {:#X},\
               \n\tSalt: {:02X?},\
               \n\tEpoch: {:#X},\
-              \n\tHeader signature: {:02X?},\
-              \n\tUnencryped signature: {:02X?}", 
+              \n\tHeader signature: {:02X?}{}", 
               from_utf8(&self.platform).unwrap(),
               from_utf8(&self.version).unwrap(),
               format_type(self.format),
@@ -339,7 +414,11 @@ impl fmt::Display for S5LHeader {
               self.salt,
               self.epoch,
               self.header_signature,
-              &self.unencrypted_sig
+              if self.unencrypted_sig == [0; 4] {
+                String::new()
+              } else {
+                format!(",\n\tUnencrypted signature: {:02X?}", self.unencrypted_sig)
+              }
         )
     }
 }
@@ -360,6 +439,25 @@ pub struct IMG2Header {
     pub sig_data:        [u8; 0x40],
     pub extsize:         u32,
     pub header_crc32:    u32,
+}
+
+impl Default for IMG2Header {
+    fn default() -> Self {
+        Self {
+            magic: [0; 4],
+            img_type: [0; 4],
+            revision: 0,
+            sec_epoch: 0,
+            load_addr: 0,
+            data_size: 0,
+            decry_data_size: 0,
+            alloc_size: 0,
+            opts: 0,
+            sig_data: [0; 0x40],
+            extsize: 0,
+            header_crc32: 0,
+        }
+    }
 }
 
 impl fmt::Display for IMG2Header {
@@ -444,11 +542,41 @@ pub struct IMG2Superblock {
     pub check: u32, // CRC-32 of header fields preceding this one
 }
 
+impl fmt::Display for IMG2Superblock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "IMG2 Superblock Header: \
+        \n\t Magic: {}\
+        \n\t Image Granule size: {:#X}\
+        \n\t Image Header offset: {:#X}\
+        \n\t Boot Blocksize: {:#X}\
+        \n\t Total Granules: {:#X}\
+        \n\t NVRAM Granules: {:#X}\
+        \n\t NVRAM Offset: {:#X}\
+        \n\t CRC32 Of Header: {:#X}",
+          revstr_from_le_bytes(&self.magic),
+          self.image_granule,
+          self.image_offset,
+          self.boot_blocksize,
+          self.image_avail,
+          self.nvram_granule,
+          self.nvram_offset,
+          self.check)
+    }
+}
+
 pub const S5L8702_HEADER_MAGIC: [u8; 4] = *b"8702";
 pub const S5L8720_HEADER_MAGIC: [u8; 4] = *b"8720";
+pub const S5L8723_HEADER_MAGIC: [u8; 4] = *b"8723";
 pub const S5L8730_HEADER_MAGIC: [u8; 4] = *b"8730";
 pub const S5L8740_HEADER_MAGIC: [u8; 4] = *b"8740";
 pub const S5L8900_HEADER_MAGIC: [u8; 4] = *b"8900";
+pub const IMG1_PLATFORMS: [[u8; 4]; 6] = [ S5L8702_HEADER_MAGIC, 
+                                           S5L8720_HEADER_MAGIC,
+                                           S5L8723_HEADER_MAGIC,
+                                           S5L8730_HEADER_MAGIC,
+                                           S5L8740_HEADER_MAGIC,
+                                           S5L8900_HEADER_MAGIC ];
+
 pub const IMG2_SB_HEADER_CIGAM: [u8; 4] = *b"2GMI";
 pub const IMG2_HEADER_CIGAM:    [u8; 4] = *b"2gmI";
 pub const IMG3_HEADER_CIGAM:    [u8; 4] = *b"3gmI";
@@ -470,7 +598,7 @@ pub const IMG3_GAT_VERSION:           [u8; 4]    = *b"SREV";
 //pub const IMG3_GAT_PRODUCTION_STATUS: [u8; 4]    = *b"DORP";
 //pub const IMG3_GAT_CHIP_TYPE:         [u8; 4]    = *b"PIHC";
 //pub const IMG3_GAT_BOARD_TYPE:        [u8; 4]    = *b"DROB";
-//pub const IMG3_GAT_UNIQUE_ID:         [u8; 4]    = *b"DICE";
+pub const IMG3_GAT_UNIQUE_ID:         [u8; 4]    = *b"DICE";
 //pub const IMG3_GAT_RANDOM_PAD:        [u8; 4]    = *b"TLAS";
 pub const IMG3_GAT_TYPE:              [u8; 4]    = *b"EPYT";
 //pub const IMG3_GAT_OVERRIDE:          [u8; 4]    = *b"DRVO";
@@ -502,7 +630,7 @@ pub const KEY_0x837: &[u8; 16] = b"\x18\x84\x58\xA6\xD1\x50\x34\xDF\xE3\x86\xF2\
 
 #[binrw]
 #[brw(little)]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct IMG3ObjHeader {
     // these fields are unsigned
     pub magic: [u8; 4],
@@ -535,7 +663,7 @@ impl fmt::Display for IMG3ObjHeader {
 
 #[binrw]
 #[brw(little)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct IMG3TagHeader {
     pub tag: [u8; 4],
     pub skip_dist: u32,
@@ -600,8 +728,8 @@ pub struct IMG3TagString{
 pub struct IMG3KBAG {
     pub selector: u32,
     pub key_size: u32,
-    pub iv_bytes: [u8; 16],
-    pub key_bytes: [u8; 32]
+    pub iv_bytes: [u8; 0x10],
+    pub key_bytes: [u8; 0x20]
 }
 
 #[binrw]
@@ -612,7 +740,7 @@ pub struct LZSSHead {
     pub adler32: u32,
     pub decomp_len: u32,
     pub comp_len: u32,
-    pub unk: u32,
+    pub vers: u32,
     #[br(count = 360)]
     pub pad: Vec<u8>,
     #[br(count = comp_len)]

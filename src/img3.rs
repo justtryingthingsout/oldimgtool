@@ -5,6 +5,7 @@ use {
     },
     std::{
         fs, 
+        io::Read,
         process::exit
     },
     binrw::BinReaderExt,
@@ -20,10 +21,20 @@ use {
         sign::Verifier,
         hash::MessageDigest
     },
-    plist::Value
+    plist::Value,
+    asn1_rs::{
+        FromDer, 
+        OctetString, 
+        Sequence
+    }
 };
 
-fn cert_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHeader, file: &mut Vec<u8>, i: usize, shshdata: &[u8], is_valid: &mut bool, devinfo: &mut Option<DeviceInfo>) -> bool {
+fn cert_tag(args: &mut Args, 
+            head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHeader, 
+            file: &mut Vec<u8>, i: usize, 
+            shshdata: &[u8], 
+            is_valid: &mut bool, 
+            devinfo: &mut Option<DeviceInfo>) -> bool {
     if let Some(path) = &args.savecertpath {
         write_file(path, &taghead.buf);
     } else if let Some(certpath) = &args.certpath {
@@ -33,44 +44,9 @@ fn cert_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
     }
 
     if args.verify {
-        let mut i = 0;
-        let check = u16::from_be_bytes(taghead.buf[range_size(i, 2)].try_into().unwrap());
-        if check == 0x3082 {
-            let mut deridx = 0;
-            let mut certs: Vec<X509> = Vec::new();
-            while i < taghead.buf.len() {
-                /* the following does not work (extra data error)
-                let parse_cert: asn1::ParseResult<_> = asn1::parse(&taghead.buf[i..i+len], |d| {
-                    let tlv = d.read_element::<asn1::Tlv>()?;
-                    let data = asn1::parse(tlv.data(), |d| {
-                        return Ok(d.read_element::<asn1::Tlv>()?.data())
-                    })?;
-                    return Ok((tlv.full_data().len(), data))
-                });
-                */
-                let check = u16::from_be_bytes(taghead.buf[range_size(i, 2)].try_into().unwrap());
-                assert_eq!(check, 0x3082);
-                deridx = i;
-                let len = u16::from_be_bytes(taghead.buf[range_size(i + 2, 2)].try_into().unwrap()) as usize;
-                certs.push(X509::from_der(&taghead.buf[range_size(i, 4 + len)]).unwrap());
-                i += 4 + len;
-            }
-        
-            let mut certiter = certs.iter().enumerate();
-            println!("Assuming \"{}\" is trusted", get_cn(certiter.next().unwrap().1));
-        
-            for (j, cert) in certiter {
-                let cn = get_cn(cert);
-                match cert.verify(&certs[j - 1].public_key().unwrap()) {
-                    Ok(_) => println!("\"{cn}\" is {}", "valid".green()),
-                    Err(e) => {
-                        *is_valid = false;
-                        println!("{} verification of {cn} with error: {e}", "Failed".red());
-                    },
-                }
-            }
-        
-            let leafcert = &certs[certs.len()-1];
+        let check = Sequence::from_der(&taghead.buf[0..]);
+        if check.is_ok() {
+            let leafcert = verify_cert(&taghead.buf, is_valid);
 
             unsafe {
                 /* 
@@ -85,19 +61,20 @@ fn cert_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
                 };
                 use std::{
                     ffi::CString,
-                    ptr::{null_mut, addr_of_mut},
+                    ptr::{null_mut, null, addr_of_mut},
                     slice::from_raw_parts
                 };
 
-                let mut x509_loc_ptr = taghead.buf[deridx..].as_ptr();
-                let unsafe_x509_cert = d2i_X509(null_mut(), addr_of_mut!(x509_loc_ptr), taghead.buf[deridx..].len() as i64);
+                let leafder = leafcert.to_der().unwrap();
+                let mut x509_loc_ptr = leafder.as_ptr();
+                let unsafe_x509_cert = d2i_X509(null_mut(), addr_of_mut!(x509_loc_ptr), leafder.len().try_into().unwrap());
                 assert!(!unsafe_x509_cert.is_null(), "Failed to parse X509");
 
                 //CFTypeRef kSecOIDAPPLE_EXTENSION_APPLE_SIGNING = CFSTR("1.2.840.113635.100.6.1.1");
                 let as_obj_id = CString::new("1.2.840.113635.100.6.1.1").unwrap();
-                let as_short  = CString::new("APPLE_SIGNING").unwrap();
-                let as_long   = CString::new("APPLE_EXTENSION_APPLE_SIGNING").unwrap();
-                let as_nid    = OBJ_create(as_obj_id.as_ptr(), as_short.as_ptr(), as_long.as_ptr());
+                //let as_short  = CString::new("APPLE_SIGNING").unwrap();
+                //let as_long   = CString::new("APPLE_EXTENSION_APPLE_SIGNING").unwrap();
+                let as_nid    = OBJ_create(as_obj_id.as_ptr(), null(), null());
                 assert!(as_nid != NID_undef, "Failed to create NID");
 
                 let nid_idx = X509_get_ext_by_NID(unsafe_x509_cert, as_nid, -1);
@@ -110,9 +87,11 @@ fn cert_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
                     let len     = ASN1_STRING_length(val);    // infallable according to docs
                     let dataptr = ASN1_STRING_get0_data(val); // infallable according to docs
                     let asn1_slice = from_raw_parts(dataptr, len.try_into().unwrap());
-                    let img3_slice = asn1::parse_single::<&[u8]>(asn1_slice).unwrap();
+                    let img3_octet = OctetString::from_der(asn1_slice).unwrap().1;
+                    let img3_slice = img3_octet.as_cow();
 
                     assert_eq!(img3_slice[0..4], IMG3_HEADER_CIGAM, "Apple certificate signing extension does not contain IMG3 data");
+                    args.verify = false;
                     parse(img3_slice.to_vec(), args, is_valid, devinfo); // skip 2 bytes because those encode the length
                 }
                 X509_free(unsafe_x509_cert);
@@ -137,52 +116,56 @@ fn cert_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
                     } else {
                         "invalid".red()
                     },
-                    if let Some(devinfo) = devinfo {
-                        let mut s = if let Some(ecid) = devinfo.ecid {
-                            vec![format!(" for the device with following:\n\tECID with hex: {ecid:X}")]
+                    if *is_valid { // no point showing the info if it's invalid anyways
+                        if let Some(devinfo) = devinfo {
+                            let mut s = if let Some(ecid) = devinfo.ecid {
+                                vec![format!(" for the device with following:\n\tECID with hex: {ecid:X}")]
+                            } else {
+                                vec![String::from(", but unpersonalized with the following constraints:")]
+                            };
+                            if let Some(board) = &devinfo.bdid {
+                                s.push(format!("\tBoard ID{}: {board}", 
+                                    if board.len() > 1 {"s"} else {""},
+                                    board=board.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+                                ));
+                            }   
+                            if let Some(chip) = &devinfo.cpid {
+                                s.push(format!("\tChip ID: 0x{chip:X}"));
+                            }
+                            if let Some(sdom) = &devinfo.sdom {
+                                s.push(format!("\tSecurity Domain: 0x{sdom:X} ({})",
+                                match sdom {
+                                    0 => Cow::from("Manufacturer"),
+                                    1 => Cow::from("Darwin"),
+                                    3 => Cow::from("RTXC"),
+                                    x => Cow::from(format!("Unknown Security Domain ({x})"))
+                                }));
+                            }
+                            if let Some(sepo) = &devinfo.sepo {
+                                s.push(format!("\tSecurity Epoch: 0x{sepo:X}"));
+                            }
+                            if let Some(cepo) = &devinfo.cepo {
+                                s.push(format!("\tHardware Epoch: 0x{cepo:X}"));
+                            }
+                            if let Some(prod) = &devinfo.prod {
+                                s.push(format!("\tProduction Mode: {}", match prod {
+                                    0 => "No",
+                                    1 => "Yes",
+                                    _ => "Unknown"
+                                }));
+                            }
+
+                            s.join("\n")
                         } else {
-                            vec![String::from(", but unpersonalized with the following constraints:")]
-                        };
-                        if let Some(board) = &devinfo.bdid {
-                            s.push(format!("\tBoard ID{}: {board}", 
-                                if board.len() > 1 {"s"} else {""},
-                                board=board.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
-                            ));
-                        }   
-                        if let Some(chip) = &devinfo.cpid {
-                            s.push(format!("\tChip ID: 0x{chip:X}"));
+                            String::from("(but not personalized)")
                         }
-                        if let Some(sdom) = &devinfo.sdom {
-                            s.push(format!("\tSecurity Domain: 0x{sdom:X} ({})",
-                            match sdom {
-                                0 => Cow::from("Manufacturer"),
-                                1 => Cow::from("Darwin"),
-                                3 => Cow::from("RTXC"),
-                                x => Cow::from(format!("Unknown Security Domain ({x})"))
-                            }));
-                        }
-                        if let Some(sepo) = &devinfo.sepo {
-                            s.push(format!("\tSecurity Epoch: 0x{sepo:X}"));
-                        }
-                        if let Some(cepo) = &devinfo.cepo {
-                            s.push(format!("\tHardware Epoch: 0x{cepo:X}"));
-                        }
-                        if let Some(prod) = &devinfo.prod {
-                            s.push(format!("\tProduction Mode: {}", match prod {
-                                0 => "No",
-                                1 => "Yes",
-                                _ => "Unknown"
-                            }));
-                        }
-                        
-                        s.join("\n")
                     } else {
-                        String::from("(but not personalized)")
+                        String::new()
                     }
             );
             return true;
         }
-        println!("Found a CERT tag with invalid data, skipping verification");
+        println!("Found a CERT tag with invalid certificates, skipping verification");
         return true;
     };
     false
@@ -204,7 +187,7 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
     }
 
     if let (Some(key), Some(path)) = (&args.key, &args.outfile) {  
-        let padded = [taghead.buf.clone(), taghead.pad.clone()].concat(); //this might not be necessary
+        let mut undec = Vec::new();
         let mut key = key.clone();
         let iv: String = args.iv.clone().unwrap_or_else(|| {
             let ret = key[..32].to_string();
@@ -221,6 +204,11 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
             x => panic!("Invalid key size: {x}")
         };
 
+        let rem = taghead.buf.len() % cipher.block_size();
+        if rem != 0 {
+            undec = taghead.buf.drain((taghead.buf.len() - rem)..).collect();
+        }
+
         let mut decrypter = Crypter::new(
             cipher,
             Mode::Decrypt,
@@ -228,14 +216,29 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
             Some(iv_bytes)
         ).unwrap();
         decrypter.pad(false);
-        let mut buf = vec![0; padded.len() + cipher.block_size()];
+        let mut buf = vec![0; taghead.buf.len() + cipher.block_size()];
         let count = decrypter.update(
-            &padded, 
+            &taghead.buf, 
             &mut buf
         ).unwrap();
         decrypter.finalize(&mut buf).unwrap_or_else(|e| {
             use std::io::Write;
-            println!("Got a error whilst finalizing the decryption: \"{e}\"");
+            let errstack = e.errors();
+            let cond = errstack.len() > 1;
+            print!("Got {} whilst finalizing the decryption: ", 
+                if cond { "multiple errors" } else { "a error" }
+            );
+            if cond {
+                for err in &errstack[..(errstack.len()-1)] {
+                    print!("{}, ", 
+                        if let Some(reason) = err.reason() { reason } else { "No reason given" }
+                    );
+                }
+            }
+            println!("{}", 
+                if let Some(reason) = errstack.last().unwrap().reason() { reason } else { "No reason given" }
+            );
+
             print!("This can sometimes still contain valid data, continue? [y/N]: ");
             std::io::stdout().flush().unwrap();
             let mut opt = String::new();
@@ -247,9 +250,10 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
             }
         });
         buf.truncate(count);
+        buf.append(&mut undec);
         
         if args.dec {
-            taghead.buf = buf.clone();
+            taghead.buf = buf;
             struct_write!(taghead, file[i..]);
         } else {
             write_file(path, &checkvalid_decry(&buf, head.img3_type, args.ext).unwrap_or(buf));
@@ -261,7 +265,6 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
         && args.setver.is_none() 
         && args.setkbag.is_none() 
         && args.settype.is_none()
-        && args.setdata.is_none()
         && args.sigpath.is_none()
         && args.certpath.is_none()
         && args.shshpath.is_none() {
@@ -370,21 +373,18 @@ fn kbag_tag(args: &Args, mainhead: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
 
 /// # Panics
 /// Panics if the arguments are incorrect.
-pub fn create(mut buf: Vec<u8>, args: &Args, outpath: &str) {
+pub fn create(mut buf: Vec<u8>, args: &Args) {
     let mut newimg: Vec<u8> = Vec::new();
     let mut objh = IMG3ObjHeader {
         magic: IMG3_HEADER_CIGAM,
-        skip_dist: 0,
-        buf_len: 0,
-        signed_len: 0,
-        img3_type: 0,
+        ..Default::default()
     };
 
     let mut sects: Vec<IMG3TagHeader> = Vec::new();
 
     if let Some(settype) = &args.settype {
         assert!(settype.len() == 4, "Tag is not length 4");
-        objh.img3_type = u32::from_be_bytes(settype.as_bytes().try_into().unwrap());
+        objh.img3_type = u32::from_be_bytes(cast_force!(settype.as_bytes(), [u8; 4]));
         sects.push(IMG3TagHeader {
             tag: IMG3_GAT_TYPE,
             skip_dist: 0x20,
@@ -449,8 +449,8 @@ pub fn create(mut buf: Vec<u8>, args: &Args, outpath: &str) {
                 _ => 0
             },
             key_size: cast_force!(key_bytes.len(), u32),
-            iv_bytes: iv_bytes.clone().try_into().unwrap(),
-            key_bytes: key_bytes.clone().try_into().unwrap()
+            iv_bytes: cast_force!(iv_bytes.clone(), [u8; 0x10]),
+            key_bytes: cast_force!(key_bytes.clone(), [u8; 0x20])
         };
         struct_write!(keyhead, tagbuf);
         let buflen = tagbuf.len();
@@ -485,7 +485,7 @@ pub fn create(mut buf: Vec<u8>, args: &Args, outpath: &str) {
             );
 
             datahead.buf = buf;
-            sects[off] = datahead;
+            sects[off] = datahead.clone();
         }
     }
 
@@ -526,7 +526,7 @@ pub fn create(mut buf: Vec<u8>, args: &Args, outpath: &str) {
         struct_write!(i, v);
         newimg.extend_from_slice(&v);
     }
-    write_file(outpath, &newimg);
+    write_file(args.outfile.as_ref().unwrap(), &newimg);
 }
 
 /// # Panics
@@ -565,18 +565,28 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                 IMG3_TAG_KRNL => "KernelCache",
                 _ => panic!("Unknown image type to be stitched")
             };
-            let fullblob = Value::from_file(shshpath).expect("Failed to read blob");
-            let blob = fullblob.as_dictionary()
+            let mut shshfile = fs::File::open(shshpath).expect("Failed to read blob");
+            let mut buf = vec![0; 5];
+            shshfile.read_exact(&mut buf).expect("Failed to read blob");
+            
+            let blob = if buf == *b"<?xml" { //shsh blob
+                            let fullblob = Value::from_file(shshpath).expect("Failed to read blob");
+                            fullblob.as_dictionary()
                                .and_then(|dict| dict.get(imgtype)?.as_dictionary())
                                .and_then(|imgblob| imgblob.get("Blob")?.as_data())
-                               .expect("Did not find the required blob");
-            let ecid = cast_struct!(IMG3TagHeader, blob);
-            let ecidlen = ecid.skip_dist;
-            file.splice(0x14+head.signed_len as usize.., blob.to_vec());
+                               .expect("Did not find the required blob")
+                               .to_vec()
+                        } else { //raw blob
+                            fs::read(shshpath).expect("Failed to read blob")
+                        };
+            let ecidlen = if blob[0..4] == IMG3_GAT_UNIQUE_ID { //older SHSH do not have ECIDs
+                cast_struct!(IMG3TagHeader, &blob).skip_dist
+            } else { 0 };
             let oldsign = head.signed_len;
             head.signed_len += ecidlen;
             head.buf_len = oldsign + cast_force!(blob.len(), u32);
             head.skip_dist = oldsign + cast_force!(blob.len(), u32) + 0x14;
+            file.splice(0x14+oldsign as usize.., blob);
             struct_write!(head, file[0..]);
         }
     }
@@ -584,6 +594,7 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
     let mut i = 20;
     let mut data: usize = 0x34;
     let mut shshdata = Vec::new();
+    let mut sawcert = false;
     while i < head.buf_len as usize { //tag parse loop until EOF
         let mut taghead = cast_struct!(IMG3TagHeader, &file[i..]);
         let tag = revstr_from_le_bytes(&taghead.tag);
@@ -622,6 +633,7 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
             }, IMG3_TAG_KEYBAG => {
                 if kbag_tag(args, &mut head, &mut taghead, &mut file, i, data) { continue; }
             }, IMG3_TAG_CERTIFICATE_CHAIN => {
+                sawcert = true;
                 if cert_tag(args, &mut head, &mut taghead, &mut file, i, &shshdata, is_valid, devinfo) { break; }
             }, IMG3_TAG_UNIQUE_ID => { //number, but this has a uint64 size
                 if args.all || args.verify {
@@ -710,6 +722,9 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
         if i >= file.len() {
             break;
         }
+    }
+    if !sawcert && args.verify {
+        println!("File cannot be verified without a CERT and SHSH tag.");
     }
     if let Some(path) = &args.outfile {
         write_file(path, &file);
