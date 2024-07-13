@@ -17,7 +17,7 @@ use {
         img2,
         Args
     },
-    colored::Colorize,
+    colored::Colorize
 };
 
 
@@ -93,19 +93,28 @@ pub fn parse(file: &[u8], args: &Args) {
     let is_ios = head.platform == S5L8900_HEADER_MAGIC || (head.platform == S5L8720_HEADER_MAGIC && head.version == IMG1_FORMAT_1);
 
     let cipher = Cipher::aes_128_cbc();
-    let datstart = if head.platform == S5L8900_HEADER_MAGIC || head.platform == S5L8702_HEADER_MAGIC {
+    let datstart = if head.platform == S5L8900_HEADER_MAGIC || head.platform == S5L8702_HEADER_MAGIC || head.platform == S5L8442_HEADER_MAGIC {
         0x800
     } else if head.platform == S5L8720_HEADER_MAGIC || head.platform == S5L8730_HEADER_MAGIC {
         0x600
-    } else if head.platform == S5L8723_HEADER_MAGIC || head.platform == S5L8740_HEADER_MAGIC {
+    } else if head.platform == S5L8723_HEADER_MAGIC || head.platform == S5L8740_HEADER_MAGIC || head.platform == S5L8443_HEADER_MAGIC {
         0x400
     } else {
-        0x200 //idk
+        0x800 //idk
+    };
+
+    let lenalign = (head.size_of_data + 0xF) & !0xF;
+    let sig_off = datstart + if head.footer_sig_off < lenalign + 0x300 { // 8900 case
+         head.footer_sig_off as usize
+    } else { //newer iPod case
+        /* supposed to be `if head.footer_cert_off < lenalign + 0x80`,
+           but iPod bootroms ignore it anyways */
+        lenalign as usize
     };
 
     if let Some(path) = &args.savesigpath {
-        assert!(datstart + head.footer_sig_off as usize != file.len(), "Signature does not exist!");
-        write_file(path, &file[datstart + head.footer_sig_off as usize..datstart + head.footer_cert_off as usize]);
+        assert!(sig_off != file.len(), "Signature does not exist!");
+        write_file(path, &file[range_size(sig_off, 0x80)]);
     }
     if let Some(path) = &args.savecertpath {
         assert!(datstart + head.footer_cert_off as usize != file.len(), "Certificate chain does not exist!");
@@ -128,9 +137,9 @@ pub fn parse(file: &[u8], args: &Args) {
                 None
             ).unwrap();
             decrypter.pad(false);
-            let mut decry = vec![0; head.size_of_data as usize + cipher.block_size()];
+            let mut decry = vec![0; head.size_of_data as usize + cipher.block_size()]; //requires size_of_data aligned?
             let count = decrypter.update(
-                &file[range_size(datstart, head.size_of_data as usize)], 
+                &file[range_size(datstart, head.size_of_data as usize)],  //requires size_of_data aligned?
                 &mut decry
             ).unwrap();
             decrypter.finalize(&mut decry).unwrap();
@@ -141,7 +150,7 @@ pub fn parse(file: &[u8], args: &Args) {
                     let mut newfile = file.to_owned();
                     head.format = X509_SIGNED;
                     struct_write!(head, newfile);
-                    newfile[range_size(datstart, head.size_of_data as usize)].copy_from_slice(&decry);
+                    newfile[range_size(datstart, head.size_of_data as usize)].copy_from_slice(&decry); //requires size_of_data aligned?
                     write_file(path, &newfile);
                 } else if args.img2 {
                     write_file(path, &decry);
@@ -150,15 +159,15 @@ pub fn parse(file: &[u8], args: &Args) {
             img2::parse(&decry, args, &mut is_valid, &None);
         } else if let Some(path) = &args.outfile {
             println!("Extracting encrypted data...");
-            write_file(path, &file[range_size(datstart, head.size_of_data as usize)]);
+            write_file(path, &file[range_size(datstart, head.size_of_data as usize)]); //requires size_of_data aligned?
         }
     } else {
         if is_ios {
-            img2::parse(&file[range_size(datstart, head.size_of_data as usize)], args, &mut is_valid, &None);
+            img2::parse(&file[range_size(datstart, head.size_of_data as usize)], args, &mut is_valid, &None); //requires size_of_data aligned?
         }
         if let Some(path) = &args.outfile {
             if args.img2 || !is_ios {
-                write_file(path, &file[range_size(datstart, head.size_of_data as usize)]);
+                write_file(path, &file[range_size(datstart, head.size_of_data as usize)]); //requires size_of_data aligned?
             }
         }
     }
@@ -204,14 +213,8 @@ pub fn parse(file: &[u8], args: &Args) {
 
         let i = head.footer_cert_off as usize + datstart;
         let check = Sequence::from_der(&file[i..]);
-        if check.is_ok() {
+        if check.is_ok() && file.len() >= i + head.footer_cert_len as usize {
             let leafcert = verify_cert(&file[range_size(i, head.footer_cert_len as usize)], &mut is_valid);
-
-            let sig_off = if (datstart + head.footer_sig_off as usize) < file.len() {
-                datstart + head.footer_sig_off as usize //8900 case
-            } else if head.size_of_data != head.footer_cert_off {
-                datstart + head.size_of_data as usize //newer iPod case
-            } else { 0 }; //has never happened before but might
 
             if sig_off == 0 {
                 println!("No image signature to verify, assuming it is valid");
@@ -219,7 +222,7 @@ pub fn parse(file: &[u8], args: &Args) {
                 let leafpub = leafcert.public_key().unwrap();
                 let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
                 verifier.set_rsa_padding(Padding::PKCS1).unwrap();
-                verifier.update(&file[0..datstart + head.size_of_data as usize]).unwrap();
+                verifier.update(&file[0..sig_off]).unwrap();
                 let ok = verifier.verify(&file[range_size(sig_off, 0x80)]).unwrap();
                 println!("S5L file signature {}", 
                     if ok {

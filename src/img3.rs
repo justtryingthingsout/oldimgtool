@@ -1,12 +1,14 @@
 use {
     crate::{
         Args, 
-        utils::*
+        utils::*,
+        apticket
     },
     std::{
         fs, 
         io::Read,
-        process::exit
+        borrow::Cow,
+        result::Result
     },
     binrw::BinReaderExt,
     colored::Colorize,
@@ -19,7 +21,8 @@ use {
         },
         rsa::Padding,
         sign::Verifier,
-        hash::MessageDigest
+        hash::MessageDigest,
+        sha::sha1
     },
     plist::Value,
     asn1_rs::{
@@ -98,6 +101,7 @@ fn cert_tag(args: &mut Args,
             } //end unsafe
 
             let leafpub = leafcert.public_key().unwrap();
+
             let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
             verifier.set_rsa_padding(Padding::PKCS1).unwrap();
             verifier.update(&file[12..20 + head.signed_len as usize]).unwrap();
@@ -149,15 +153,15 @@ fn cert_tag(args: &mut Args,
                             }
                             if let Some(prod) = &devinfo.prod {
                                 s.push(format!("\tProduction Mode: {}", match prod {
-                                    0 => "No",
-                                    1 => "Yes",
+                                    0 => "False",
+                                    1 => "True",
                                     _ => "Unknown"
                                 }));
                             }
 
                             s.join("\n")
                         } else {
-                            String::from("(but not personalized)")
+                            String::from(" without constraints")
                         }
                     } else {
                         String::new()
@@ -186,16 +190,16 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
         args.dec = true; //hack to remove keybag headers
     }
 
-    if let (Some(key), Some(path)) = (&args.key, &args.outfile) {  
+    if let (Some(argkey), Some(path)) = (args.key.as_deref(), args.outfile.as_deref()) {  
         let mut undec = Vec::new();
-        let mut key = key.clone();
-        let iv: String = args.iv.clone().unwrap_or_else(|| {
-            let ret = key[..32].to_string();
-            key = key[32..].to_string();
+        let mut key = argkey;
+        let iv = args.iv.as_deref().unwrap_or_else(|| {
+            let ret = &argkey[..32];
+            key = &argkey[32..];
             ret
         });
-        let key_bytes: &[u8] = &hex::decode(key.as_bytes()).unwrap();
-        let iv_bytes:  &[u8] = &hex::decode(iv.as_bytes()).unwrap();
+        let key_bytes = hex::decode(key.as_bytes()).unwrap();
+        let iv_bytes  = hex::decode(iv.as_bytes()).unwrap();
         
         let cipher = match key.len() {
             32 => Cipher::aes_128_cbc(),
@@ -204,23 +208,29 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
             x => panic!("Invalid key size: {x}")
         };
 
-        let rem = taghead.buf.len() % cipher.block_size();
-        if rem != 0 {
-            undec = taghead.buf.drain((taghead.buf.len() - rem)..).collect();
+        let is_old = taghead.pad.bytes().filter_map(Result::ok).all(|b| b == 0); // just a guess for <= iPhoneOS 3.0
+        if is_old {
+            let rem = taghead.buf.len() % cipher.block_size();
+            if rem != 0 {
+                undec = taghead.buf.drain((taghead.buf.len() - rem)..).collect();
+            }
+        } else {
+            taghead.buf.append(&mut taghead.pad);
         }
 
         let mut decrypter = Crypter::new(
             cipher,
             Mode::Decrypt,
-            key_bytes,
-            Some(iv_bytes)
+            &key_bytes,
+            Some(&iv_bytes)
         ).unwrap();
         decrypter.pad(false);
         let mut buf = vec![0; taghead.buf.len() + cipher.block_size()];
-        let count = decrypter.update(
+        decrypter.update(
             &taghead.buf, 
             &mut buf
         ).unwrap();
+        let mut flag = true;
         decrypter.finalize(&mut buf).unwrap_or_else(|e| {
             use std::io::Write;
             let errstack = e.errors();
@@ -243,21 +253,23 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
             std::io::stdout().flush().unwrap();
             let mut opt = String::new();
             std::io::stdin().read_line(&mut opt).unwrap();
-            if opt.trim() == "y" { 
-                 0
-            } else {
-                std::process::exit(1);
-            }
+            if opt.trim() != "y" { 
+                flag = false;
+            };
+            0
         });
-        buf.truncate(count);
-        buf.append(&mut undec);
-        
-        if args.dec {
-            taghead.buf = buf;
-            struct_write!(taghead, file[i..]);
-        } else {
-            write_file(path, &checkvalid_decry(&buf, head.img3_type, args.ext).unwrap_or(buf));
-            exit(0);
+        if flag {
+            buf.truncate((buf.len() - cipher.block_size()) as usize);
+            if is_old {
+                buf.append(&mut undec);
+            }
+            
+            if args.dec {
+                taghead.buf = buf;
+                struct_write!(taghead, file[i..]);
+            } else {
+                write_file(path, &checkvalid_decry(&buf, head.img3_type, args.ext).unwrap_or(buf));
+            }
         }
     } else if let Some(path) = &args.outfile {
         // if img3 setters are used, it wouldn't make sense to output the data buffer
@@ -269,7 +281,6 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
         && args.certpath.is_none()
         && args.shshpath.is_none() {
             write_file(path, &checkvalid_decry(&taghead.buf, head.img3_type, args.ext).unwrap_or(taghead.buf.clone()));
-            exit(0);
         }
     }
 }
@@ -390,7 +401,7 @@ pub fn create(mut buf: Vec<u8>, args: &Args) {
             skip_dist: 0x20,
             buf_len: 4,
             buf: settype.chars().rev().collect::<String>().as_bytes().to_vec(),
-            pad: vec![0; 16],
+            pad: vec![0; 0x10],
         });
     }
 
@@ -464,7 +475,7 @@ pub fn create(mut buf: Vec<u8>, args: &Args) {
 
         if !args.onlykbag {
             //need to encrypt DATA with the keybag
-            let (off, dh) = sects.iter().enumerate().find(|x| &x.1.tag == b"ATAD").unwrap();
+            let (off, dh) = sects.iter().enumerate().find(|x| x.1.tag == IMG3_GAT_DATA).unwrap();
             let mut datahead = dh.clone();
             let padded = [datahead.buf, datahead.pad.clone()].concat();
             
@@ -533,6 +544,13 @@ pub fn create(mut buf: Vec<u8>, args: &Args) {
 /// Panics if the buffer does not contain a valid IMG3 file, or the arguments are incorrect.
 pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &mut Option<DeviceInfo>) {
     let mut head = cast_struct!(IMG3ObjHeader, &file);
+    let mut apticket = None;
+    let sha1 = sha1(&file[range_size(0xC, 0x8 + head.signed_len as usize)]);
+    let partialsha1 = crate::apticket::partial_sha1(&file[range_size(0xC, 0x8 + head.signed_len as usize)]).unwrap();
+
+    //println!("Digest: {}, Partial Digest: {}", hex::encode(&sha1), hex::encode(&partialsha1));
+
+    let mut vers = None;
     if args.all {
         println!("{head}");
     }
@@ -544,50 +562,64 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
     if let Some(shshpath) = &args.shshpath {
         if head.img3_type != IMG3_TAG_CERT {
             let imgtype = match head.img3_type {
-                IMG3_TAG_IBOT => "iBoot",
-                IMG3_TAG_IBSS => "iBSS",
-                IMG3_TAG_IBEC => "iBEC",
-                IMG3_TAG_DTRE => "DeviceTree",
-                IMG3_TAG_LOGO => "AppleLogo",
-                IMG3_TAG_BAT0 => "BatteryLow0",
-                IMG3_TAG_BAT1 => "BatteryLow1",
-                IMG3_TAG_GLYC => "BatteryCharging",
                 IMG3_TAG_CHG0 => "BatteryCharging0",
                 IMG3_TAG_CHG1 => "BatteryCharging1",
-                IMG3_TAG_GLYP => "BatteryPlugin",
                 IMG3_TAG_BATF => "BatteryFull",
-                IMG3_TAG_RECM => "RecoveryMode",
-                IMG3_TAG_RKRN => "RestoreKernelCache",
-                IMG3_TAG_RDTR => "RestoreDeviceTree",
-                IMG3_TAG_RDSK => "RestoreRamDisk",
-                IMG3_TAG_RLGO => "RestoreLogo",
+                IMG3_TAG_BAT0 => "BatteryLow0",
+                IMG3_TAG_BAT1 => "BatteryLow1",
+                IMG3_TAG_DTRE => "DeviceTree",
+                IMG3_TAG_GLYC => "BatteryCharging",
+                IMG3_TAG_GLYP => "BatteryPlugin",
+                IMG3_TAG_IBEC => "iBEC",
+                IMG3_TAG_IBOT => "iBoot",
+                IMG3_TAG_IBSS => "iBSS",
                 IMG3_TAG_ILLB => "LLB",
                 IMG3_TAG_KRNL => "KernelCache",
+                IMG3_TAG_LOGO => "AppleLogo",
+                IMG3_TAG_RDSK => "RestoreRamDisk",
+                IMG3_TAG_RDTR => "RestoreDeviceTree",
+                IMG3_TAG_RECM => "RecoveryMode",
+                IMG3_TAG_RKRN => "RestoreKernelCache",
+                IMG3_TAG_RLGO => "RestoreLogo",
                 _ => panic!("Unknown image type to be stitched")
             };
             let mut shshfile = fs::File::open(shshpath).expect("Failed to read blob");
             let mut buf = vec![0; 5];
             shshfile.read_exact(&mut buf).expect("Failed to read blob");
-            
-            let blob = if buf == *b"<?xml" { //shsh blob
-                            let fullblob = Value::from_file(shshpath).expect("Failed to read blob");
-                            fullblob.as_dictionary()
-                               .and_then(|dict| dict.get(imgtype)?.as_dictionary())
-                               .and_then(|imgblob| imgblob.get("Blob")?.as_data())
-                               .expect("Did not find the required blob")
-                               .to_vec()
-                        } else { //raw blob
-                            fs::read(shshpath).expect("Failed to read blob")
-                        };
-            let ecidlen = if blob[0..4] == IMG3_GAT_UNIQUE_ID { //older SHSH do not have ECIDs
-                cast_struct!(IMG3TagHeader, &blob).skip_dist
-            } else { 0 };
-            let oldsign = head.signed_len;
-            head.signed_len += ecidlen;
-            head.buf_len = oldsign + cast_force!(blob.len(), u32);
-            head.skip_dist = oldsign + cast_force!(blob.len(), u32) + 0x14;
-            file.splice(0x14+oldsign as usize.., blob);
-            struct_write!(head, file[0..]);
+
+            if buf[..2] == [0x30, 0x82] { //apticket
+                apticket = Some(fs::read(shshpath).expect("Failed to read APTicket"));
+            } else {
+                let mut part_dgst = vec![];
+                let blob = if buf == *b"<?xml" { //shsh blob
+                                let fullblob = Value::from_file(shshpath).expect("Failed to read blob");
+                                apticket = Some(fullblob.as_dictionary()
+                                           .and_then(|dict| dict.get("APTicket")?.as_data())
+                                           .expect("Could not decode APTicket")
+                                           .to_vec());
+
+                                part_dgst = fullblob.as_dictionary()
+                                            .and_then(|dict| dict.get(imgtype)?.as_dictionary())
+                                            .and_then(|imgblob| imgblob.get("PartialDigest")?.as_data())
+                                            .expect("Did not find the required PartialDigest (personalization not required?)")
+                                            .to_vec();
+                                assert!(part_dgst.len() > 8, "Partial Digest too small!");
+
+                                fullblob.as_dictionary()
+                                   .and_then(|dict| dict.get(imgtype)?.as_dictionary())
+                                   .and_then(|imgblob| imgblob.get("Blob")?.as_data())
+                                   .expect("Did not find the required blob (personalization not required?)")
+                                   .to_vec()
+                            } else { //raw blob
+                                fs::read(shshpath).expect("Failed to read blob")
+                            };
+                let oldsign = head.signed_len; // should be &part_dgst[4..8] as u32
+                head.signed_len += u32::from_le_bytes(cast_force!(&part_dgst[0..4], [u8; 4]));
+                head.buf_len = oldsign + cast_force!(blob.len(), u32);
+                head.skip_dist = oldsign + cast_force!(blob.len(), u32) + /* sizeof IMG3ObjHeader */ 0x14;
+                file.splice(/* sizeof IMG3ObjHeader */ 0x14 + oldsign as usize.., blob);
+                struct_write!(head, file[0..]);
+            }
         }
     }
 
@@ -604,6 +636,7 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
         match tag.as_str() {
             IMG3_TAG_VERSION => {
                 let mut vershead = cast_struct!(IMG3TagString, &taghead.buf);
+                vers = Some(vershead.str_bytes.clone());
                 if args.all || args.ver {
                     println!("{}Version string: {vers}", if args.all {"\t"} else {""}, vers=vershead.str_bytes);
                 } else if let Some(vers) = &args.setver {
@@ -634,6 +667,9 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                 if kbag_tag(args, &mut head, &mut taghead, &mut file, i, data) { continue; }
             }, IMG3_TAG_CERTIFICATE_CHAIN => {
                 sawcert = true;
+                if let Some(ref apticket) = apticket {
+                    apticket::handle_apticket(apticket, head.img3_type, &sha1, &partialsha1, vers.as_deref(), is_valid);
+                }
                 if cert_tag(args, &mut head, &mut taghead, &mut file, i, &shshdata, is_valid, devinfo) { break; }
             }, IMG3_TAG_UNIQUE_ID => { //number, but this has a uint64 size
                 if args.all || args.verify {
@@ -710,15 +746,16 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                         }
                     }, _ => { unreachable!("This match should be unreachable") }
                 }
-            }, IMG3_TAG_RANDOM_PAD | IMG3_TAG_NONCE => {
+            }, 
+            IMG3_TAG_RANDOM_PAD => {},
+            IMG3_TAG_NONCE | IMG3_TAG_RANDOM => {
                 print_unknown_val(args, &taghead);
-            }, _ => { // assume number
+            }, x => { // assume number
                 print_unknown_val(args, &taghead);
-                panic!("Unknown tag found, aborting");
+                eprintln!("Unknown tag found (\"{x}\"), please file a issue!");
             }
         }
         i += taghead.skip_dist as usize;
-        //dbg!(taghead.tag, i);
         if i >= file.len() {
             break;
         }
@@ -726,7 +763,17 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
     if !sawcert && args.verify {
         println!("File cannot be verified without a CERT and SHSH tag.");
     }
+
     if let Some(path) = &args.outfile {
-        write_file(path, &file);
+        // setter args create a img3
+        if args.setver.is_some() || 
+           args.setkbag.is_some() ||
+           args.settype.is_some() || 
+           args.setdata.is_some() || 
+           args.sigpath.is_some() || 
+           args.certpath.is_some() || 
+           args.shshpath.is_some() {
+            write_file(path, &file);
+        }
     }
 }

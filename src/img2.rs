@@ -14,7 +14,7 @@ use {
 };
 
 /// # Panics
-/// Panics if the file is not an IMG2 file, if the keys are invalid, or the arguments are invalid.
+/// Panics if the keys are invalid or the arguments are invalid.
 pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>>) {
     if file[0..4] != IMG2_HEADER_CIGAM { return }
     let head = cast_struct!(IMG2Header, file);
@@ -64,6 +64,7 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
         );
 
         /*
+            For IMG2 from on-device NOR:
             Data signature cannot be verified without a UID encrypted IMG2 Verify key
             The verify key is 
                 {0xCD, 0xF3, 0x45, 0xB3, 0x12, 0xE7, 0x48, 0x85, 0x8B, 0xBE, 0x21, 0x47, 0xF0, 0xE5, 0x80},
@@ -83,6 +84,8 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
 
             The same can be done for the 0x20 byte long hash at 0x3E0 (except padding only to 0x20), 
             which is the hash of 0 ~ 0x3E0.
+            
+            For IMG2 from IPSWs, this field is empty.
         */
     }
     

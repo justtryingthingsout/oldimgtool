@@ -16,6 +16,7 @@ pub use {
         str::from_utf8,
         borrow::Cow,
         fmt,
+        error::Error
     },
     crate::lzss::*,
     binrw::BinReaderExt,
@@ -246,25 +247,25 @@ pub fn do_resize(mainhead: &mut IMG3ObjHeader, head: &mut IMG3TagHeader, file: &
 
 pub const LZSS_MAGIC: [u8; 8] = *b"complzss";
 
-pub const IMG3_TAG_ILLB: u32 = 0x69_6C_6C_62; // illb
-pub const IMG3_TAG_IBOT: u32 = 0x69_62_6F_74; // ibot
-pub const IMG3_TAG_IBEC: u32 = 0x69_62_65_63; // ibec
-pub const IMG3_TAG_IBSS: u32 = 0x69_62_73_73; // ibss
-pub const IMG3_TAG_LOGO: u32 = 0x6C_6F_67_6F; // logo
-pub const IMG3_TAG_DTRE: u32 = 0x64_74_72_65; // dtre
-pub const IMG3_TAG_RECM: u32 = 0x72_65_63_6D; // recm
-pub const IMG3_TAG_NSRV: u32 = 0x6E_73_72_76; // nsrv
-pub const IMG3_TAG_GLYC: u32 = 0x67_6C_79_43; // glyC
-pub const IMG3_TAG_GLYP: u32 = 0x67_6C_79_50; // glyP
-pub const IMG3_TAG_CHG0: u32 = 0x63_68_67_30; // chg0
-pub const IMG3_TAG_CHG1: u32 = 0x63_68_67_31; // chg1
 pub const IMG3_TAG_BAT0: u32 = 0x62_61_74_30; // bat0
 pub const IMG3_TAG_BAT1: u32 = 0x62_61_74_31; // bat1
 pub const IMG3_TAG_BATF: u32 = 0x62_61_74_46; // batF
+pub const IMG3_TAG_CHG0: u32 = 0x63_68_67_30; // chg0
+pub const IMG3_TAG_CHG1: u32 = 0x63_68_67_31; // chg1
+pub const IMG3_TAG_DTRE: u32 = 0x64_74_72_65; // dtre
+pub const IMG3_TAG_GLYC: u32 = 0x67_6C_79_43; // glyC
+pub const IMG3_TAG_GLYP: u32 = 0x67_6C_79_50; // glyP
+pub const IMG3_TAG_IBEC: u32 = 0x69_62_65_63; // ibec
+pub const IMG3_TAG_IBOT: u32 = 0x69_62_6F_74; // ibot
+pub const IMG3_TAG_IBSS: u32 = 0x69_62_73_73; // ibss
+pub const IMG3_TAG_ILLB: u32 = 0x69_6C_6C_62; // illb
 pub const IMG3_TAG_KRNL: u32 = 0x6B_72_6E_6C; // krnl
-pub const IMG3_TAG_RKRN: u32 = 0x72_6B_72_6E; // rkrn
-pub const IMG3_TAG_RDTR: u32 = 0x72_64_74_72; // rdtr
+pub const IMG3_TAG_LOGO: u32 = 0x6C_6F_67_6F; // logo
+pub const IMG3_TAG_NSRV: u32 = 0x6E_73_72_76; // nsrv
 pub const IMG3_TAG_RDSK: u32 = 0x72_64_73_6B; // rdsk
+pub const IMG3_TAG_RDTR: u32 = 0x72_64_74_72; // rdtr
+pub const IMG3_TAG_RECM: u32 = 0x72_65_63_6D; // recm
+pub const IMG3_TAG_RKRN: u32 = 0x72_6B_72_6E; // rkrn
 pub const IMG3_TAG_RLGO: u32 = 0x72_6C_67_6F; // rlgo
 
 pub const IMG3_TAG_CERT: u32 = 0x63_65_72_74; // cert (special, in kSecOIDAPPLE_EXTENSION_APPLE_SIGNING)
@@ -314,7 +315,7 @@ pub const kHFSXSigWord: &[u8; 2] = b"HX";
             || &buf[range_size(0x200, 3)] == b"LLB")  
             && iboottags.contains(&expected) {
         println!("Found iBoot");
-    } else if &buf[0..7] == b"iBootIm" && imagetags.contains(&expected) { //
+    } else if &buf[0..7] == b"iBootIm" && imagetags.contains(&expected) {
         println!("Found iBoot image");
     } else if iboottags.contains(&expected) || imagetags.contains(&expected) {
         println!("The image may be decrypted with the wrong key. Saving the file anyways...");
@@ -564,13 +565,17 @@ impl fmt::Display for IMG2Superblock {
     }
 }
 
+pub const S5L8442_HEADER_MAGIC: [u8; 4] = *b"8442";
+pub const S5L8443_HEADER_MAGIC: [u8; 4] = *b"8443";
 pub const S5L8702_HEADER_MAGIC: [u8; 4] = *b"8702";
 pub const S5L8720_HEADER_MAGIC: [u8; 4] = *b"8720";
 pub const S5L8723_HEADER_MAGIC: [u8; 4] = *b"8723";
 pub const S5L8730_HEADER_MAGIC: [u8; 4] = *b"8730";
 pub const S5L8740_HEADER_MAGIC: [u8; 4] = *b"8740";
 pub const S5L8900_HEADER_MAGIC: [u8; 4] = *b"8900";
-pub const IMG1_PLATFORMS: [[u8; 4]; 6] = [ S5L8702_HEADER_MAGIC, 
+pub const IMG1_PLATFORMS: [[u8; 4]; 8] = [ S5L8443_HEADER_MAGIC,
+                                           S5L8442_HEADER_MAGIC,
+                                           S5L8702_HEADER_MAGIC, 
                                            S5L8720_HEADER_MAGIC,
                                            S5L8723_HEADER_MAGIC,
                                            S5L8730_HEADER_MAGIC,
@@ -600,6 +605,7 @@ pub const IMG3_GAT_VERSION:           [u8; 4]    = *b"SREV";
 //pub const IMG3_GAT_BOARD_TYPE:        [u8; 4]    = *b"DROB";
 pub const IMG3_GAT_UNIQUE_ID:         [u8; 4]    = *b"DICE";
 //pub const IMG3_GAT_RANDOM_PAD:        [u8; 4]    = *b"TLAS";
+//pub const IMG3_GAT_RANDOM:            [u8; 4]    = *b"DNAR";
 pub const IMG3_GAT_TYPE:              [u8; 4]    = *b"EPYT";
 //pub const IMG3_GAT_OVERRIDE:          [u8; 4]    = *b"DRVO";
 //pub const IMG3_GAT_HARDWARE_EPOCH:    [u8; 4]    = *b"OPEC";
@@ -617,6 +623,7 @@ pub const IMG3_TAG_CHIP_TYPE:         &str    = "CHIP";
 pub const IMG3_TAG_BOARD_TYPE:        &str    = "BORD";
 pub const IMG3_TAG_UNIQUE_ID:         &str    = "ECID";
 pub const IMG3_TAG_RANDOM_PAD:        &str    = "SALT";
+pub const IMG3_TAG_RANDOM:            &str    = "RAND";
 pub const IMG3_TAG_TYPE:              &str    = "TYPE";
 pub const IMG3_TAG_OVERRIDE:          &str    = "OVRD";
 pub const IMG3_TAG_HARDWARE_EPOCH:    &str    = "CEPO";
@@ -687,6 +694,7 @@ fn tagtype(tag: [u8; 4]) -> Cow<'static, str>{
         "BORD" => Cow::from("Board Type"),
         "ECID" => Cow::from("Unique ID"),
         "SALT" => Cow::from("Random Pad"),
+        "RAND" => Cow::from("Random"),
         "TYPE" => Cow::from("Type"),
         "OVRD" => Cow::from("Override"),
         "CEPO" => Cow::from("Hardware Epoch"),

@@ -56,9 +56,9 @@ Verifying a image's integrity and output the image's type:
 ## Building
 First, install `cargo` if you haven't already, instructions are [here](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 
-Then, clone this repository and `cd` into it.
+Then, run `cargo install --git https://github.com/justtryingthingsout/oldimgtool.git`.
 
-Finally, run `cargo install --path .`, and use it with `oldimgtool`.
+Finally, use it with `oldimgtool`.
 
 ### Note for Windows
 In order to get the program to compile, you may need to:

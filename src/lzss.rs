@@ -9,7 +9,7 @@ use {
 };
 
 /// # Safety
-/// data.len() must be less than or equal to the actual data size
+/// `data.len()` must be less than or equal to the actual data size
 #[must_use] pub fn create_complzss_header(data: &[u8], comp_data: Vec<u8>) -> LZSSHead {
     let datptr = data.as_ptr();
     let adler32 = unsafe { 

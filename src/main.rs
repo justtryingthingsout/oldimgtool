@@ -29,10 +29,6 @@ fn main() {
         }
     } else { 
         let key = args.key.as_ref().and_then(|k| hex::decode(k).ok());
-        if fw.len() > 0x8404 && fw[0x8400..0x8404] == IMG2_SB_HEADER_CIGAM {
-            superblock::parse(&fw, &args); //IMG2
-            return;
-        };
         match fw[..4].try_into().unwrap() {
             ref x if IMG1_PLATFORMS.contains(x) => // Platform as magic
                 img1::parse(&fw, &args),
@@ -52,7 +48,14 @@ fn main() {
                 let mut devinfo = None;
                 img3::parse(fw, &mut args, &mut is_valid, &mut devinfo)           
             },
-            x => panic!("Unknown image type with magic: {x:02x?}")
+            IMG2_SB_HEADER_CIGAM => { //IMG2 in le
+                superblock::parse(&fw, &args); 
+            }
+            x => panic!("Unknown image type with magic: {}", if fw[..4].iter().all(|x| x.is_ascii()) {
+                Cow::from(std::str::from_utf8(&x).unwrap())
+            } else {
+                Cow::from(format!("{x:02x?}"))
+            })
         }
     };
 }

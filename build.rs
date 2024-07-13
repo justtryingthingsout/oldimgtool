@@ -10,9 +10,14 @@ fn main() {
         .flag_if_supported("-Wno-unused-function")
         .compile("lzss");
 
+    cc::Build::new()
+        .file("src/ext/sha1.c")
+        .compile("sha1");
+
     // Tell cargo to invalidate the built crate whenever the wrapper changes
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=src/ext/compression.c");
+    println!("cargo:rerun-if-changed=src/ext/sha1.c");
 
     // The bindgen::Builder is the main entry point
     // to bindgen, and lets you build up options for
@@ -23,7 +28,7 @@ fn main() {
         .header("wrapper.h")
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.
