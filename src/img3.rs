@@ -1,3 +1,21 @@
+/*
+    oldimgtool - A IMG1/2/3 parser and a NOR dump parser
+    Copyright (C) 2024 plzdonthaxme
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 use {
     crate::{
         Args, 
@@ -367,7 +385,7 @@ fn kbag_tag(args: &Args, mainhead: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
                 ).unwrap();
                 encrypter.finalize(&mut buf).unwrap();
                 buf.truncate(count);
-                datahead.buf = buf.clone();
+                datahead.buf = buf;
                 struct_write!(datahead, file[data..]);
             }
         }
@@ -641,7 +659,7 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                     println!("{}Version string: {vers}", if args.all {"\t"} else {""}, vers=vershead.str_bytes);
                 } else if let Some(vers) = &args.setver {
                     println!("Version was: {oldv}", oldv=vershead.str_bytes);
-                    vershead.str_bytes = vers.clone();
+                    vershead.str_bytes.clone_from(vers);
                     vershead.str_len = cast_force!(vershead.str_bytes.len(), u32);
                     struct_write!(vershead, taghead.buf);
                     let buf = taghead.buf.clone();
@@ -668,7 +686,7 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
             }, IMG3_TAG_CERTIFICATE_CHAIN => {
                 sawcert = true;
                 if let Some(ref apticket) = apticket {
-                    apticket::handle_apticket(apticket, head.img3_type, &sha1, &partialsha1, vers.as_deref(), is_valid);
+                    apticket::parse(apticket, head.img3_type, &sha1, &partialsha1, vers.as_deref(), is_valid);
                 }
                 if cert_tag(args, &mut head, &mut taghead, &mut file, i, &shshdata, is_valid, devinfo) { break; }
             }, IMG3_TAG_UNIQUE_ID => { //number, but this has a uint64 size

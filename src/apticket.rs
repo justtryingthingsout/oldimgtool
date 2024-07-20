@@ -1,3 +1,21 @@
+/*
+    oldimgtool - A IMG1/2/3 parser and a NOR dump parser
+    Copyright (C) 2024 plzdonthaxme
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+*/
+
 use asn1_rs::{
     Set,
     Any,
@@ -39,7 +57,8 @@ const TAGMAP: Map<u32, IMGTag> = phf_map! {
     /* IMG3_TAG_RLGO */ 0x72_6C_67_6Fu32 => IMGTag { fullhash: Tag(8),   partialhash: Tag(44), trust: Tag(49),  build: Tag(0)  },
 };
 
-
+/// # Panics
+/// Panics when the buffer is too small
 #[must_use] pub fn partial_sha1(buf: &[u8]) -> Option<Vec<u8>> {
     #[allow(warnings)]
     mod bindings {
@@ -53,22 +72,23 @@ const TAGMAP: Map<u32, IMGTag> = phf_map! {
     let mut buf = buf.to_owned();
 
     buf[0..4].copy_from_slice(&(signed_len + 0x40).to_le_bytes());
+    let sha_success = i32::try_from(shaSuccess).unwrap();
     unsafe {
         use std::mem::MaybeUninit;
         let mut ctx = MaybeUninit::uninit();
         let ctxptr = ctx.as_mut_ptr();
         let mut ret = SHA1Reset(ctxptr);
-        if ret != shaSuccess as i32 {
+        if ret != sha_success {
             println!("SHA1Reset failed, ret: {ret:#X}");
             return None
         };
-        ret = SHA1Input(ctxptr, buf.as_ptr(), buf.len() as u32);
-        if ret != shaSuccess as i32 {
+        ret = SHA1Input(ctxptr, buf.as_ptr(), u32::try_from(buf.len()).unwrap());
+        if ret != sha_success {
             println!("SHA1Input failed, ret: {ret:#X}");
             return None
         };
         ret = SHA1ResultPartial(ctxptr, digest.as_mut_ptr());
-        if ret != shaSuccess as i32 {
+        if ret != sha_success {
             println!("SHA1Result failed, ret: {ret:#X}");
             return None
         };
@@ -79,7 +99,10 @@ const TAGMAP: Map<u32, IMGTag> = phf_map! {
     Some(digest)
 } 
 
-pub fn handle_apticket(apticket: &[u8], tag: u32, fullsha1: &[u8], partialsha1: &[u8], imgvers: Option<&str>, is_valid: &mut bool) {
+#[allow(clippy::doc_markdown)] // APTicket false-positive for clippy
+/// # Panics
+/// This function can panic when a invalid APTicket is passed.
+pub fn parse(apticket: &[u8], tag: u32, fullsha1: &[u8], partialsha1: &[u8], imgvers: Option<&str>, is_valid: &mut bool) {
     //println!("{}", hex::encode(partialsha1));
     let (_, _nonce) = Sequence::from_der_and_then(apticket, |d| {
         let (d, _) = Any::from_der(d)?; // ign
@@ -90,12 +113,7 @@ pub fn handle_apticket(apticket: &[u8], tag: u32, fullsha1: &[u8], partialsha1: 
             let mut res: (&[u8], Vec<u8>) = (&[], vec![]);
             let mut val = true;
             let mut can_trust = true;
-            loop {
-                let (i, cur) = match Any::from_der(d) { // Parse context-specific like this
-                    Ok(x) => x,
-                    Err(_) => break
-                };
-
+            while let Ok((i, cur)) = Any::from_der(d) {// Parse context-specific like this
                 if cur.tag() == looking {
                     let vec = cur.as_bytes().to_owned();
                     res = (i, vec);
