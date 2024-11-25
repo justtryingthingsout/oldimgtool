@@ -17,13 +17,14 @@
 */
 
 //clippy config
-#![warn(clippy::all, clippy::pedantic)]
-#![allow(
-    clippy::too_many_lines,           // refactor required but not now
-    clippy::struct_excessive_bools,   // arguments struct, can't change much
-    clippy::wildcard_imports,         // this is only done for my own crates, others are specified
-    clippy::too_many_arguments        // don't know what to do with the arguments, they are required
+#![warn(
+    clippy::all, 
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo
 )]
+
+#![allow(clippy::multiple_crate_versions)]
 
 use clap::Parser;
 
@@ -36,6 +37,7 @@ pub mod img3;
 pub mod superblock;
 pub mod apticket;
 
+#[expect(clippy::struct_excessive_bools)]   // arguments struct, can't change much
 #[derive(Parser, Debug, Clone)]
 #[clap(author="@plzdonthaxme", version="1.1", about="A IMG1/2/3 and NOR parser, made in Rust", disable_version_flag=true)]
 pub struct Args {
@@ -90,6 +92,8 @@ pub struct Args {
     pub certpath: Option<String>,
     #[clap(short='B', help="Personalize with/stitch a SHSH blob to the IMG3 file", value_name="FILE", help_heading="Setters")]
     pub shshpath: Option<String>,
+    #[clap(skip)] // used internally, not an actual cmdline argument
+    pub apticketbuf: Option<Vec<u8>>,
 
     //create
     #[clap(short='m', long, help="Create a image with a image type (setters will be used)", value_name="S5L|IMG3")]

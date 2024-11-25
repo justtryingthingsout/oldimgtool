@@ -31,7 +31,29 @@ use {
         hash::MessageDigest
     },
     crate::{
-        utils::*,
+        utils::{
+            BinReaderExt,
+            BinWrite,
+            Cursor,
+            FromDer,
+            IMG1_FORMAT_1,
+            KEY_837,
+            S5L8442_HEADER_MAGIC,
+            S5L8443_HEADER_MAGIC,
+            S5L8702_HEADER_MAGIC,
+            S5L8720_HEADER_MAGIC,
+            S5L8723_HEADER_MAGIC,
+            S5L8730_HEADER_MAGIC,
+            S5L8740_HEADER_MAGIC,
+            S5L8900_HEADER_MAGIC,
+            S5LHeader,
+            Sequence,
+            X509_SIGNED,
+            X509_SIGNED_ENCRYPTED,
+            range_size,
+            verify_cert,
+            write_file
+        },
         img2,
         Args
     },
@@ -79,7 +101,7 @@ pub fn create(buf: &[u8], args: &Args) {
     let cipher = Cipher::aes_128_cbc();
     let encd = &encrypt(
         cipher, 
-        KEY_0x837, 
+        KEY_837, 
         None,
         res
     ).unwrap_or_else(|e| 
@@ -100,6 +122,7 @@ pub fn create(buf: &[u8], args: &Args) {
 
 /// # Panics
 /// Panics if the input file is not a valid IMG1 file
+#[expect(clippy::too_many_lines, clippy::cognitive_complexity)] // refactor required
 pub fn parse(file: &[u8], args: &Args) {
     let mut head = cast_struct!(S5LHeader, file);
     if args.all {
@@ -143,7 +166,7 @@ pub fn parse(file: &[u8], args: &Args) {
     if let Some(ref key) = args.key {
         bufkey = hex::decode(key).ok();
     } else if head.platform == S5L8900_HEADER_MAGIC || (head.platform == S5L8720_HEADER_MAGIC && head.version == IMG1_FORMAT_1) {
-        bufkey = Some(KEY_0x837.to_vec());
+        bufkey = Some(KEY_837.to_vec());
     }
 
     if head.format == X509_SIGNED_ENCRYPTED {
@@ -197,7 +220,7 @@ pub fn parse(file: &[u8], args: &Args) {
             let res = &sha1.finish()[0..0x10];
             let encd = &encrypt(
                 cipher, 
-                KEY_0x837, 
+                KEY_837, 
                 None,
                 res
             ).unwrap_or_else(|e| 

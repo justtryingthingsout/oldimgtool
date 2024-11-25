@@ -64,15 +64,15 @@ fn main() {
             },
             IMG3_HEADER_CIGAM => { //Img3 in le
                 let mut devinfo = None;
-                img3::parse(fw, &mut args, &mut is_valid, &mut devinfo)           
+                let _ = img3::parse(fw, &mut args, &mut is_valid, &mut devinfo);
             },
             IMG2_SB_HEADER_CIGAM => { //IMG2 in le
-                superblock::parse(&fw, &args); 
+                superblock::parse(fw, &mut args); 
             }
-            x => panic!("Unknown image type with magic: {}", if fw[..4].iter().all(|x| x.is_ascii()) {
-                Cow::from(std::str::from_utf8(&x).unwrap())
+            x => panic!("Unknown image type with magic: {}", if x.iter().all(|x| x.is_ascii()) {
+                format!("\"{}\"", std::str::from_utf8(&x).unwrap())
             } else {
-                Cow::from(format!("{x:02x?}"))
+                format!("{x:02x?}")
             })
         }
     };

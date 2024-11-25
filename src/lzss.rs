@@ -16,13 +16,13 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#[allow(warnings)]
+#[expect(warnings)]
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
 use {
-    bindings::*,
+    bindings::{compress_lzss, decompress_lzss, local_adler32},
     crate::utils::{LZSSHead, LZSS_MAGIC},
 };
 

@@ -44,7 +44,7 @@ Setters:
 Extracting a image:  
 `oldimgtool applelogo@2x~iphone.s5l8950x.img3 logo.bin`
 
-Extracting a image using a decryption IV and keys:  
+Extracting a image using decryption IV and keys:  
 `oldimgtool --iv e8744b87c6b4c134c00432a5b8af302b -k 7b2764a96f1ab43ebc73e2167c774cefaed671d5c4522bae12d7e0e9da3e7e3a iBoot.n94ap.RELEASE.img3 iBoot.bin`
 
 Extracting a image's keybags:  
@@ -53,8 +53,8 @@ Extracting a image's keybags:
 Output the image's type:  
 `oldimgtool -t iBoot.n94ap.RELEASE.img3`
 
-Verifying a image's integrity and personalize a image using a SHSH blob:
-`oldimgtool -v -B 10.3.4-n41.shsh2 iBSS.iphone5.RELEASE.dfu iBSS-signed.img3`
+Personalizing (signing) a image using a SHSH blob and verifying the now signed image's integrity:
+`oldimgtool -B 10.3.4-n41.shsh2 -v iBSS.iphone5.RELEASE.dfu iBSS-signed.img3`
 
 ## Building
 First, install `cargo` if you haven't already, instructions are [here](https://doc.rust-lang.org/cargo/getting-started/installation.html).

@@ -1,25 +1,31 @@
 [package]
 name = "oldimgtool"
 version = "1.1.0"
+description = "oldimgtool - A IMG1/2/3 parser and a NOR dump parser"
+repository = "https://github.com/justtryingthingsout/oldimgtool"
+readme = "README.md"
 edition = "2021"
+keywords = ["apple", "ios", "cli"]
+categories = ["command-line-utilities"]
 license = "GPL-3.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.2.4", features = ["derive"] }
-byteorder = "1.4.3"
-binrw = "0.14.0"
-phf = { version = "0.11.1", features = ["macros"] }
-hex = "0.4.3"
-crc32fast = "1.3.2"
-openssl = { version="0.10.51" } #add "features = ["vendored"]" for cross-compilation support
-openssl-sys = "0.9.86"
-asn1-rs = "0.6.1"
-colored = "2.0.0"
-memchr = "2.5.0"
-plist = "1.4.3"
+clap = { version = "4", features = ["derive"] }
+byteorder = "1"
+binrw = "0.14.1"
+phf = { version = "0", features = ["macros"] }
+hex = "0"
+crc32fast = "1"
+openssl = { version="0.10.68" } #add "features = ["vendored"]" for cross-compilation support
+openssl-sys = "0.9.104"
+asn1-rs = "0"
+colored = "2"
+memchr = "2"
+plist = "1"
+lazy_static = "1"
 
 [build-dependencies]
-bindgen = "0.69.1"
-cc = "1.0.79"
+bindgen = "0"
+cc = "1.2.1"

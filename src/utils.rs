@@ -21,7 +21,7 @@ pub use {
         binrw, 
         BinRead, 
         BinWrite,
-        io::Cursor
+        io::Cursor,
     },
     openssl::{
         nid::Nid,
@@ -34,7 +34,8 @@ pub use {
         str::from_utf8,
         borrow::Cow,
         fmt,
-        error::Error
+        error::Error,
+        collections::HashMap
     },
     crate::lzss::*,
     binrw::BinReaderExt,
@@ -45,6 +46,7 @@ pub use {
         ToDer
     },
     colored::Colorize,
+    lazy_static::lazy_static
 };
 
 //utility macros
@@ -193,7 +195,7 @@ pub fn write_file(path: &str, arr: &[u8]) {
 }
 
 //create a range from the start and size
-#[must_use] pub fn range_size(start: usize, size: usize) -> Range<usize> {
+#[must_use] pub const fn range_size(start: usize, size: usize) -> Range<usize> {
     start..start+size
 }
 
@@ -271,6 +273,7 @@ pub const IMG3_TAG_BATF: u32 = 0x62_61_74_46; // batF
 pub const IMG3_TAG_CHG0: u32 = 0x63_68_67_30; // chg0
 pub const IMG3_TAG_CHG1: u32 = 0x63_68_67_31; // chg1
 pub const IMG3_TAG_DTRE: u32 = 0x64_74_72_65; // dtre
+pub const IMG3_TAG_DIAG: u32 = 0x64_69_61_67; // diag
 pub const IMG3_TAG_GLYC: u32 = 0x67_6C_79_43; // glyC
 pub const IMG3_TAG_GLYP: u32 = 0x67_6C_79_50; // glyP
 pub const IMG3_TAG_IBEC: u32 = 0x69_62_65_63; // ibec
@@ -287,11 +290,10 @@ pub const IMG3_TAG_RKRN: u32 = 0x72_6B_72_6E; // rkrn
 pub const IMG3_TAG_RLGO: u32 = 0x72_6C_67_6F; // rlgo
 
 pub const IMG3_TAG_CERT: u32 = 0x63_65_72_74; // cert (special, in kSecOIDAPPLE_EXTENSION_APPLE_SIGNING)
+pub const IMG3_TAG_SCAB: u32 = 0x53_43_41_42; // scab (special, APTicket stored in NOR)
 
-#[allow(non_upper_case_globals)]
-pub const kHFSPlusSigWord: &[u8; 2] = b"H+";
-#[allow(non_upper_case_globals)]
-pub const kHFSXSigWord: &[u8; 2] = b"HX";
+pub const HFS_PLUS_SIG_WORD: &[u8; 2] = b"H+"; //kHFSPlusSigWord
+pub const HFSX_SIG_WORD: &[u8; 2] = b"HX";     //kHFSXSigWord
 
 /// # Panics
 /// Panics if lzss failed to decompress 
@@ -323,10 +325,14 @@ pub const kHFSXSigWord: &[u8; 2] = b"HX";
             assert_eq!(&lzsstr.comp_data[0..4], b"\xFF\xCE\xFA\xED");
             return Some(decompress(&lzsstr.comp_data, lzsstr.decomp_len, lzsstr.adler32).unwrap_or_else(|| panic!("Adler32 mismatch when decompressing kernelcache")));
         }
-    } else if (&buf[range_size(0x400, 2)] == kHFSPlusSigWord
-            || &buf[range_size(0x400, 2)] == kHFSXSigWord)
+    } else if (&buf[range_size(0x400, 2)] == HFS_PLUS_SIG_WORD
+            || &buf[range_size(0x400, 2)] == HFSX_SIG_WORD)
             && expected == IMG3_TAG_RDSK {
         println!("Found ramdisk");
+    } else if u32::from_le_bytes(buf[0..4].try_into().unwrap()) < 0x100
+            && (expected == IMG3_TAG_DTRE ||
+                expected == IMG3_TAG_RDTR) {
+        println!("Found devicetree");
     } else if (&buf[range_size(0x200, 5)] == b"iBoot" 
             || &buf[range_size(0x200, 4)] == b"iBSS" 
             || &buf[range_size(0x200, 4)] == b"iBEC" 
@@ -335,7 +341,8 @@ pub const kHFSXSigWord: &[u8; 2] = b"HX";
         println!("Found iBoot");
     } else if &buf[0..7] == b"iBootIm" && imagetags.contains(&expected) {
         println!("Found iBoot image");
-    } else if iboottags.contains(&expected) || imagetags.contains(&expected) {
+    } else if iboottags.contains(&expected) || imagetags.contains(&expected) ||
+      [IMG3_TAG_KRNL, IMG3_TAG_RKRN, IMG3_TAG_RDSK, IMG3_TAG_DTRE, IMG3_TAG_RDTR].contains(&expected) {
         println!("The image may be decrypted with the wrong key. Saving the file anyways...");
     }
     None
@@ -343,8 +350,8 @@ pub const kHFSXSigWord: &[u8; 2] = b"HX";
 
 #[must_use] pub fn format_type(value: u8) -> String {
     match value {
-        1 => Cow::from("Boot encrypted with UID key"),
-        2 => Cow::from("Boot plaintext"),
+        1 => Cow::from("Boot Encrypted with UID key"),
+        2 => Cow::from("Boot Plaintext"),
         3 => Cow::from("Encrypted with GID key"),
         4 => Cow::from("Plaintext"),
         _ => Cow::from(format!("Unknown Format ({value})"))
@@ -353,9 +360,9 @@ pub const kHFSXSigWord: &[u8; 2] = b"HX";
 
 #[must_use] pub fn override_types(value: u32) -> String {
     if value & (1 << 0) == 0 {
-        String::from("No override")
+        String::from("No Override")
     } else {
-        String::from("Production override")
+        String::from("Production Override")
     }
 }
 
@@ -375,7 +382,7 @@ pub static OPTMAP: phf::Map<u32, &'static str> = phf_map! {
     8u32 => "Trusted Image",
     9u32 => "Encrypted Image",
     24u32 => "Image with Secure Boot",
-    30u32 => "With extension header",
+    30u32 => "With Extension Header",
     31u32 => "Immutable"
 };
 
@@ -415,13 +422,13 @@ impl fmt::Display for S5LHeader {
               \n\tVersion: {},\
               \n\tFormat: {},\
               \n\tEntry: {:#X},\
-              \n\tSize of data: {:#X},\
-              \n\tFooter signature offset: {:#X},\
-              \n\tFooter certificate offset: {:#X},\
-              \n\tFooter certificate length: {:#X},\
+              \n\tSize of Data: {:#X},\
+              \n\tFooter Signature Offset: {:#X},\
+              \n\tFooter Certificate Offset: {:#X},\
+              \n\tFooter Certificate Length: {:#X},\
               \n\tSalt: {:02X?},\
               \n\tEpoch: {:#X},\
-              \n\tHeader signature: {:02X?}{}", 
+              \n\tHeader Signature: {:02X?}{}", 
               from_utf8(&self.platform).unwrap(),
               from_utf8(&self.version).unwrap(),
               format_type(self.format),
@@ -483,16 +490,16 @@ impl fmt::Display for IMG2Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "IMG2 Header:\
                   \n\tMagic: {}\
-                  \n\tImage type: {}\
+                  \n\tImage Type: {}\
                   \n\tRevision: {:#X}\
-                  \n\tSecurity epoch: {:#X}\
-                  \n\tLoad address: {:#X}\
-                  \n\tData size: {:#X}\
-                  \n\tDecrypted data size: {:#X}\
-                  \n\tAllocated size: {:#X}\
+                  \n\tSecurity Epoch: {:#X}\
+                  \n\tLoad Address: {:#X}\
+                  \n\tData Size: {:#X}\
+                  \n\tDecrypted Data Size: {:#X}\
+                  \n\tAllocated Size: {:#X}\
                   \n\tOptions: {}\
                   \n\tSignature: {:02X?}\
-                  \n\tExternal header size: {:#X}\
+                  \n\tExternal Header Size: {:#X}\
                   \n\tHeader CRC-32: {:#X}",
                   revstr_from_le_bytes(&self.magic),
                   revstr_from_le_bytes(&self.img_type),
@@ -529,8 +536,8 @@ impl fmt::Display for IMG2ExtHeader {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "IMG2 Extension Header:\
                   \n\tCheck: {:#X}\
-                  \n\tNext size: {:#X}\
-                  \n\tExtension type: {}\
+                  \n\tNext Size: {:#X}\
+                  \n\tExtension Type: {}\
                   \n\tOptions: {}\
                   \n\tData: {}",
                   self.check,
@@ -565,13 +572,13 @@ impl fmt::Display for IMG2Superblock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "IMG2 Superblock Header: \
         \n\t Magic: {}\
-        \n\t Image Granule size: {:#X}\
-        \n\t Image Header offset: {:#X}\
+        \n\t Image Granule Size: {:#X}\
+        \n\t Image Header Offset: {:#X}\
         \n\t Boot Blocksize: {:#X}\
         \n\t Total Granules: {:#X}\
         \n\t NVRAM Granules: {:#X}\
         \n\t NVRAM Offset: {:#X}\
-        \n\t CRC32 Of Header: {:#X}",
+        \n\t Header CRC32: {:#X}",
           revstr_from_le_bytes(&self.magic),
           self.image_granule,
           self.image_offset,
@@ -623,7 +630,7 @@ pub const IMG3_GAT_VERSION:           [u8; 4]    = *b"SREV";
 //pub const IMG3_GAT_BOARD_TYPE:        [u8; 4]    = *b"DROB";
 pub const IMG3_GAT_UNIQUE_ID:         [u8; 4]    = *b"DICE";
 //pub const IMG3_GAT_RANDOM_PAD:        [u8; 4]    = *b"TLAS";
-//pub const IMG3_GAT_RANDOM:            [u8; 4]    = *b"DNAR";
+pub const IMG3_GAT_RANDOM:            [u8; 4]    = *b"DNAR";
 pub const IMG3_GAT_TYPE:              [u8; 4]    = *b"EPYT";
 //pub const IMG3_GAT_OVERRIDE:          [u8; 4]    = *b"DRVO";
 //pub const IMG3_GAT_HARDWARE_EPOCH:    [u8; 4]    = *b"OPEC";
@@ -650,8 +657,7 @@ pub const IMG3_TAG_KEYBAG:            &str    = "KBAG";
 
 //pub const APPLE_CERT_SHA512: &str = "5621f576006af21c100ab091653762ccc72e66caadb5b61235ef2d91595cbcf897c449353e9ce818c97ab2a8ee938c7204ea38887cb4eb8e8cff3234edbcc65b";
 
-#[allow(non_upper_case_globals)]
-pub const KEY_0x837: &[u8; 16] = b"\x18\x84\x58\xA6\xD1\x50\x34\xDF\xE3\x86\xF2\x3B\x61\xD4\x37\x74";
+pub const KEY_837: &[u8; 16] = b"\x18\x84\x58\xA6\xD1\x50\x34\xDF\xE3\x86\xF2\x3B\x61\xD4\x37\x74";
 
 #[binrw]
 #[brw(little)]
@@ -674,8 +680,8 @@ impl fmt::Display for IMG3ObjHeader {
             "IMG3 Object Header:\
               \n\tMagic: {},\
               \n\tSkip Distance: {:#x},\
-              \n\tBuffer length: {:#x},\
-              \n\tSigned length: {:#x},\
+              \n\tBuffer Length: {:#x},\
+              \n\tSigned Length: {:#x},\
               \n\tType: {}", 
               revstr_from_le_bytes(&self.magic), 
               &self.skip_dist, 
@@ -728,7 +734,7 @@ impl fmt::Display for IMG3TagHeader {
             "IMG3 Tag:\
             \n\tTag: {} ({}),\
             \n\tSkip Distance: {:#x},\
-            \n\tBuffer length: {:#x},",
+            \n\tBuffer Length: {:#x},",
             revstr_from_le_bytes(&self.tag),
             tagtype(self.tag),
             &self.skip_dist, 
@@ -773,6 +779,103 @@ pub struct LZSSHead {
     pub comp_data: Vec<u8>
 }
 
+lazy_static!{
+    static ref BOARDMAP: HashMap<(u32, u32), (&'static str, &'static str, &'static str)> = vec![
+        ((0x00, 0x8900), ("iPhone 2G",                                          "iPhone1,1",   "m68ap")),
+        // m68dev?
+        ((0x04, 0x8900), ("iPhone 3G",                                          "iPhone1,2",   "n82ap")),
+        // n82dev?
+	    ((0x00, 0x8920), ("iPhone 3GS",                                         "iPhone2,1",   "n88ap")),
+        ((0x01, 0x8920), ("iPhone 3GS Development Board",                       "iPhone2,1",   "n88dev")),
+	    ((0x00, 0x8930), ("iPhone 4 (GSM)",                                     "iPhone3,1",   "n90ap")),
+        ((0x01, 0x8930), ("iPhone 4 (GSM) Development Board",                   "iPhone3,1",   "n90dev")),
+	    ((0x04, 0x8930), ("iPhone 4 (GSM) R2 2012",                             "iPhone3,2",   "n90bap")),
+        ((0x05, 0x8930), ("iPhone 4 (GSM) R2 2012 Development Board",           "iPhone3,2",   "n90bdev")),
+	    ((0x06, 0x8930), ("iPhone 4 (CDMA)",                                    "iPhone3,3",   "n92ap")),
+        ((0x07, 0x8930), ("iPhone 4 (CDMA) Development Board",                  "iPhone3,3",   "n92dev")),
+	    ((0x08, 0x8940), ("iPhone 4S",                                          "iPhone4,1",   "n94ap")),
+        ((0x09, 0x8940), ("iPhone 4S Development Board",                        "iPhone4,1",   "n94dev")),
+	    ((0x00, 0x8950), ("iPhone 5 (GSM)",                                     "iPhone5,1",   "n41ap")),
+        ((0x01, 0x8950), ("iPhone 5 (GSM) Development Board",                   "iPhone5,1",   "n41dev")),
+	    ((0x02, 0x8950), ("iPhone 5 (Global)",                                  "iPhone5,2",   "n42ap")),
+        ((0x03, 0x8950), ("iPhone 5 (Global) Development Board",                "iPhone5,2",   "n42dev")),
+	    ((0x0a, 0x8950), ("iPhone 5c (GSM)",                                    "iPhone5,3",   "n48ap")),
+        ((0x0B, 0x8950), ("iPhone 5c (GSM) Development Board",                  "iPhone5,3",   "n48dev")),
+	    ((0x0e, 0x8950), ("iPhone 5c (Global)",                                 "iPhone5,4",   "n49ap")),
+        ((0x0F, 0x8950), ("iPhone 5c (Global) Development Board",               "iPhone5,4",   "n49dev")),
+        ((0x02, 0x8900), ("iPod touch (1st gen)",                               "iPod1,1",     "n45ap")),
+        // n45dev?
+	    ((0x00, 0x8720), ("iPod touch (2nd gen)",                               "iPod2,1",     "n72ap")),
+        // n72dev?
+	    ((0x02, 0x8922), ("iPod touch (3rd gen)",                               "iPod3,1",     "n18ap")),
+        // n18dev?
+	    ((0x08, 0x8930), ("iPod touch (4th gen)",                               "iPod4,1",     "n81ap")),
+        ((0x09, 0x8930), ("iPod touch (4th gen) Development Board",             "iPod4,1",     "n81dev")),
+        ((0x00, 0x8942), ("iPod touch (5th gen)",                               "iPod5,1",     "n78ap")),
+        ((0x01, 0x8942), ("iPod touch (5th gen) Development Board",             "iPod5,1",     "n78dev")),
+	    ((0x02, 0x8930), ("iPad",                                               "iPad1,1",     "k48ap")),
+        // k48dev?
+	    ((0x04, 0x8940), ("iPad 2 (WiFi)",                                      "iPad2,1",     "k93ap")),
+        ((0x05, 0x8940), ("iPad 2 (WiFi) Development Board",                    "iPad2,1",     "k93dev")),
+	    ((0x06, 0x8940), ("iPad 2 (GSM)",                                       "iPad2,2",     "k94ap")),
+        ((0x07, 0x8940), ("iPad 2 (GSM) Development Board",                     "iPad2,2",     "k94dev")),
+	    ((0x02, 0x8940), ("iPad 2 (CDMA)",                                      "iPad2,3",     "k95ap")),
+        ((0x03, 0x8940), ("iPad 2 (CDMA) Development Board",                    "iPad2,3",     "k95dev")),
+	    ((0x06, 0x8942), ("iPad 2 (WiFi) R2 2012",                              "iPad2,4",     "k93aap")),
+        ((0x07, 0x8942), ("iPad 2 (WiFi) R2 2012 Development Board",            "iPad2,4",     "k93adev")),
+	    ((0x0a, 0x8942), ("iPad mini (WiFi)",                                   "iPad2,5",     "p105ap")),
+        ((0x0B, 0x8942), ("iPad mini (WiFi) Development Board",                 "iPad2,5",     "p105dev")),
+	    ((0x0c, 0x8942), ("iPad mini (GSM)",                                    "iPad2,6",     "p106ap")),
+        ((0x0D, 0x8942), ("iPad mini (GSM) Development Board",                  "iPad2,6",     "p106dev")),
+	    ((0x0e, 0x8942), ("iPad mini (Global)",                                 "iPad2,7",     "p107ap")),
+        ((0x0F, 0x8942), ("iPad mini (Global) Development Board",               "iPad2,7",     "p107dev")),
+	    ((0x00, 0x8945), ("iPad (3rd gen, WiFi)",                               "iPad3,1",     "j1ap")),
+        ((0x00, 0x8945), ("iPad (3rd gen, WiFi) Development Board",             "iPad3,1",     "j1dev")),
+	    ((0x02, 0x8945), ("iPad (3rd gen, CDMA)",                               "iPad3,2",     "j2ap")),
+        ((0x03, 0x8945), ("iPad (3rd gen, CDMA) Development Board",             "iPad3,2",     "j2dev")),
+	    ((0x04, 0x8945), ("iPad (3rd gen, GSM)",                                "iPad3,3",     "j2aap")),
+        ((0x05, 0x8945), ("iPad (3rd gen, GSM) Development Board",              "iPad3,3",     "j2adev")),
+        ((0x00, 0x8955), ("iPad (4th gen, WiFi)",                               "iPad3,4",     "p101ap")),
+        ((0x01, 0x8955), ("iPad (4th gen, WiFi) Development Board",             "iPad3,4",     "p101dev")),
+	    ((0x02, 0x8955), ("iPad (4th gen, GSM)",                                "iPad3,5",     "p102ap")),
+        ((0x03, 0x8955), ("iPad (4th gen, GSM) Development Board",              "iPad3,5",     "p102dev")),
+	    ((0x04, 0x8955), ("iPad (4th gen, Global)",                             "iPad3,6",     "p103ap")),
+        ((0x05, 0x8955), ("iPad (4th gen, Global) Development Board",           "iPad3,6",     "p103dev")),
+        ((0x10, 0x8930), ("Apple TV 2",                                         "AppleTV2,1",  "k66ap")),
+        ((0x11, 0x8930), ("Apple TV 2 Development Board",                       "AppleTV2,1",  "k66dev")),
+	    ((0x08, 0x8942), ("Apple TV 3",                                         "AppleTV3,1",  "j33ap")),
+        ((0x09, 0x8942), ("Apple TV 3 Development Board",                       "AppleTV3,1",  "j33dev")),
+	    ((0x00, 0x8947), ("Apple TV 3 (2013)",                                  "AppleTV3,2",  "j33iap")),
+        ((0x01, 0x8947), ("Apple TV 3 (2013) Development Board",                "AppleTV3,2",  "j33idev")),
+        ((0x00, 0x8747), ("Lightning Digital AV Adapter",                       "iAccy1,1",    "b137ap")),
+        ((0x01, 0x8747), ("Lightning Digital AV Adapter Development Board",     "iAccy1,1",    "b137dev")),
+        ((0x00, 0x8747), ("Lightning Digital VGA Adapter",                      "iAccy1,2",    "b165ap")),
+        ((0x01, 0x8747), ("Lightning Digital VGA Adapter Development Board",    "iAccy1,2",    "b165dev")),
+        // s5l8747xfpgaap?
+        ((0x3F, 0x8747), ("S5L8747X iFPGA Development Board",                   "iFPGA",       "s5l8747xfpgadev")),
+        // s5l8920xfpgaap?
+        ((0x3F, 0x8920), ("S5L8920X iFPGA Development Board",                   "iFPGA",       "s5l8920xfpgadev")),
+        // s5l8922xfpgaap?
+        ((0x3F, 0x8922), ("S5L8922X iFPGA Development Board",                   "iFPGA",       "s5l8922xfpgadev")),
+        // s5l8930xfpgaap?
+        ((0x1F, 0x8930), ("S5L8930X iFPGA Development Board",                   "iFPGA",       "s5l8930xfpgadev")),
+        // s5l8940xfpgaap?
+        ((0x3F, 0x8940), ("S5L8940X iFPGA Development Board",                   "iFPGA",       "s5l8940xfpgadev")),
+        // s5l8942xfpgaap?
+        ((0x3F, 0x8942), ("S5L8942X iFPGA Development Board",                   "iFPGA",       "s5l8942xfpgadev")),
+        // s5l8945xfpgaap?
+        ((0x3F, 0x8945), ("S5L8945X iFPGA Development Board",                   "iFPGA",       "s5l8945xfpgadev")),
+        // s5l8947xfpgaap?
+        ((0x3F, 0x8947), ("S5L8947X iFPGA Development Board",                   "iFPGA",       "s5l8947xfpgadev")),
+        ((0x3C, 0x8950), ("Swifter",                                            "Unknown",     "swifterap")),
+        ((0x3D, 0x8950), ("Swifter Development Board",                          "Unknown",     "swifterdev")),
+        ((0x3E, 0x8950), ("S5L8950X iFPGA",                                     "iFPGA",       "s5l8950xfpgaap")),
+        ((0x3F, 0x8950), ("S5L8950X iFPGA Development Board",                   "iFPGA",       "s5l8950xfpgadev")),
+        ((0x3E, 0x8955), ("S5L8955X iFPGA",                                     "iFPGA",       "s5l8955xfpgaap")),
+        ((0x3F, 0x8955), ("S5L8955X iFPGA Development Board",                   "iFPGA",       "s5l8955xfpgadev")),
+    ].into_iter().collect();
+}
+
 #[derive(Default, Debug)]
 pub struct DeviceInfo {
     pub ecid: Option<u64>,
@@ -781,5 +884,69 @@ pub struct DeviceInfo {
     pub sdom: Option<u32>,
     pub sepo: Option<u32>,
     pub cepo: Option<u32>,
-    pub prod: Option<u32>
+    pub prod: Option<u32>,
+    pub nonc: Option<[u8; 20]>,
+    pub ovrd: Option<u32>
+}
+
+impl std::fmt::Display for DeviceInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(ecid) = self.ecid {
+            writeln!(f, " for the device with the following:\n\tECID: {ecid:X}")?;
+        } else {
+            writeln!(f, ", but unpersonalized with the following constraints:")?;
+        };
+        if let Some(chip) = &self.cpid {
+            writeln!(f, "\tChip ID: 0x{chip:X}")?;
+        }
+        if let Some(board) = &self.bdid {
+            let boards = board.iter().map(u32::to_string).collect::<Vec<_>>().join(", ");
+            write!(f, "\tBoard ID{}: {boards}", 
+                if boards.len() > 1 {"s"} else {""},
+            )?;
+            if let Some(cpid) = self.cpid {
+                write!(f, " (")?;
+                let mut biter = board.iter().peekable();
+                while let Some(i) = biter.next() {
+                    write!(f, "{}", BOARDMAP.get(&(*i, cpid)).map_or("Unknown device", |x| x.0))?;
+                    if biter.peek().is_some() {
+                        write!(f, ", ")?;
+                    }
+                }
+                writeln!(f, ")")?;
+            } else {
+                writeln!(f)?;
+            }
+        }   
+        if let Some(sdom) = &self.sdom {
+            let sdomtype = match sdom {
+                0 => Cow::from("Manufacturer"),
+                1 => Cow::from("Darwin"),
+                3 => Cow::from("RTXC"),
+                x => Cow::from(format!("Unknown Security Domain ({x})"))
+            };
+            writeln!(f, "\tSecurity Domain: 0x{sdom:X} ({sdomtype})",)?;
+        }
+        if let Some(sepo) = &self.sepo {
+            writeln!(f, "\tSecurity Epoch: 0x{sepo:X}")?;
+        }
+        if let Some(cepo) = &self.cepo {
+            writeln!(f, "\tHardware Epoch: 0x{cepo:X}")?;
+        }
+        if let Some(prod) = &self.prod {
+            let prodmode = match prod {
+                0 => "False",
+                1 => "True",
+                _ => "Unknown"
+            };
+            writeln!(f, "\tProduction Mode: {prodmode}")?;
+        }
+        if let Some(nonc) = &self.nonc {
+            writeln!(f, "\tAP Nonce (ignored for local boot): {}", hex::encode_upper(nonc))?;
+        }
+        if let Some(ovrd) = self.ovrd {
+            writeln!(f, ", and applies the override: {}", override_types(ovrd))?;
+        }
+        Ok(())
+    }
 }

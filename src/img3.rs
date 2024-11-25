@@ -18,105 +18,96 @@
 
 use {
     crate::{
-        Args, 
-        utils::*,
-        apticket
-    },
-    std::{
-        fs, 
-        io::Read,
-        borrow::Cow,
-        result::Result
-    },
-    binrw::BinReaderExt,
-    colored::Colorize,
-    openssl::{
-        symm::{
-            Cipher, 
-            Crypter, 
-            Mode, 
-            encrypt
-        },
-        rsa::Padding,
-        sign::Verifier,
-        hash::MessageDigest,
-        sha::sha1
-    },
-    plist::Value,
-    asn1_rs::{
+        apticket, utils::{
+            checkvalid_decry, compress, create_complzss_header, do_resize, override_types, print_unknown_val, range_size, revstr_from_le_bytes, verify_cert, write_file, BinWrite, Cursor, DeviceInfo, IMG3ObjHeader, IMG3TagHeader, IMG3TagString, IMG3KBAG, IMG3_GAT_CERTIFICATE_CHAIN, IMG3_GAT_DATA, IMG3_GAT_KEYBAG, IMG3_GAT_RANDOM, IMG3_GAT_SIGNED_HASH, IMG3_GAT_TYPE, IMG3_GAT_UNIQUE_ID, IMG3_GAT_VERSION, IMG3_HEADER_CIGAM, IMG3_TAG_BAT0, IMG3_TAG_BAT1, IMG3_TAG_BATF, IMG3_TAG_BOARD_TYPE, IMG3_TAG_CERT, IMG3_TAG_CERTIFICATE_CHAIN, IMG3_TAG_CHG0, IMG3_TAG_CHG1, IMG3_TAG_CHIP_TYPE, IMG3_TAG_DATA, IMG3_TAG_DIAG, IMG3_TAG_DTRE, IMG3_TAG_GLYC, IMG3_TAG_GLYP, IMG3_TAG_HARDWARE_EPOCH, IMG3_TAG_IBEC, IMG3_TAG_IBOT, IMG3_TAG_IBSS, IMG3_TAG_ILLB, IMG3_TAG_KEYBAG, IMG3_TAG_KRNL, IMG3_TAG_LOGO, IMG3_TAG_NONCE, IMG3_TAG_OVERRIDE, IMG3_TAG_PRODUCTION_STATUS, IMG3_TAG_RANDOM, IMG3_TAG_RANDOM_PAD, IMG3_TAG_RDSK, IMG3_TAG_RDTR, IMG3_TAG_RECM, IMG3_TAG_RKRN, IMG3_TAG_RLGO, IMG3_TAG_SCAB, IMG3_TAG_SECURITY_DOMAIN, IMG3_TAG_SECURITY_EPOCH, IMG3_TAG_SIGNED_HASH, IMG3_TAG_TYPE, IMG3_TAG_UNIQUE_ID, IMG3_TAG_VERSION
+        }, Args
+    }, asn1_rs::{
         FromDer, 
         OctetString, 
         Sequence
+    }, binrw::BinReaderExt, colored::Colorize, openssl::{
+        hash::MessageDigest, rsa::Padding, sha::sha1, sign::Verifier, symm::{
+            encrypt, Cipher, Crypter, Mode
+        }, x509::X509
+    }, plist::Value, std::{
+        borrow::Cow, fs, io::Read, result::Result
     }
 };
 
+fn parse_ext(leafcert: &X509, args: &mut Args, is_valid: &mut bool, devinfo: &mut Option<DeviceInfo>) -> bool {
+    unsafe {
+        /* 
+        * openssl crate does not implement the below functions, 
+        * use unsafe to call the openssl_sys versions ourselves and check for errors 
+        */
+        use openssl_sys::{
+            OBJ_txt2obj, //NID_undef, OBJ_obj2nid, OBJ_create, 
+            d2i_X509, X509_free, X509_get_ext_by_OBJ, X509_get_ext, 
+            X509_EXTENSION_get_data,
+            ASN1_STRING, ASN1_STRING_length, ASN1_STRING_get0_data,
+            ERR_get_error, ERR_reason_error_string
+        };
+        use std::{
+            ffi::{CString, CStr},
+            ptr::{null_mut, addr_of_mut}, // null,
+            slice::from_raw_parts
+        };
+
+        let leafder = leafcert.to_der().unwrap();
+        let mut x509_loc_ptr = leafder.as_ptr();
+        let unsafe_x509_cert = d2i_X509(null_mut(), addr_of_mut!(x509_loc_ptr), leafder.len().try_into().unwrap());
+        assert!(!unsafe_x509_cert.is_null(), "Failed to parse X509");
+
+        //CFTypeRef kSecOIDAPPLE_EXTENSION_APPLE_SIGNING = CFSTR("1.2.840.113635.100.6.1.1");
+        let as_obj_id = CString::new("1.2.840.113635.100.6.1.1").unwrap();
+        //let as_short  = CString::new("APPLE_SIGNING").unwrap();
+        //let as_long   = CString::new("APPLE_EXTENSION_APPLE_SIGNING").unwrap();
+        //let as_nid    = OBJ_create(as_obj_id.as_ptr(), null(), null());
+        let as_obj = OBJ_txt2obj(as_obj_id.as_ptr(), 1);
+        if as_obj.is_null() {
+            let err = ERR_get_error();
+            assert!(err != 0);
+            let errstr = ERR_reason_error_string(err);
+            let errstr = CStr::from_ptr(errstr);
+            panic!("Failed to create NID with error: {}", errstr.to_str().unwrap());
+        }
+
+        let nid_idx = X509_get_ext_by_OBJ(unsafe_x509_cert, as_obj, -1);
+        //assert!(nid_idx != -1, "Failed to get signing extension!");
+        if nid_idx == -1 {
+            return false;
+        }
+        println!("Found Apple certificate signing extension, parsing it");
+        let ext     = X509_get_ext(unsafe_x509_cert, nid_idx);
+        assert!(!ext.is_null(), "Failed to get extension");
+        
+        let val     = X509_EXTENSION_get_data(ext) as *const ASN1_STRING; // infallable according to docs
+        let len     = ASN1_STRING_length(val);    // infallable according to docs
+        let dataptr = ASN1_STRING_get0_data(val); // infallable according to docs
+        let asn1_slice = from_raw_parts(dataptr, len.try_into().unwrap());
+        let img3_octet = OctetString::from_der(asn1_slice).unwrap().1;
+        let img3_slice = img3_octet.as_cow();
+
+        assert_eq!(img3_slice[0..4], IMG3_HEADER_CIGAM, "Apple certificate signing extension does not contain IMG3 data");
+        args.verify = false;
+        parse(img3_slice.to_vec(), args, is_valid, devinfo);
+        args.verify = true;
+        X509_free(unsafe_x509_cert);
+        true
+    } //end unsafe
+}
+
 fn cert_tag(args: &mut Args, 
-            head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHeader, 
-            file: &mut Vec<u8>, i: usize, 
-            shshdata: &[u8], 
+            head: &IMG3ObjHeader, taghead: &IMG3TagHeader, 
+            file: &[u8], shshdata: &[u8], 
             is_valid: &mut bool, 
             devinfo: &mut Option<DeviceInfo>) -> bool {
-    if let Some(path) = &args.savecertpath {
-        write_file(path, &taghead.buf);
-    } else if let Some(certpath) = &args.certpath {
-        let certfile = fs::read(certpath).unwrap();
-        let taglen = 12 + cast_force!(taghead.buf.len() + taghead.pad.len(), u32);
-        do_resize(head, taghead, file, i, taglen, certfile);
-    }
 
     if args.verify {
         let check = Sequence::from_der(&taghead.buf[0..]);
         if check.is_ok() {
             let leafcert = verify_cert(&taghead.buf, is_valid);
-
-            unsafe {
-                /* 
-                * openssl crate does not implement the below functions, 
-                * use unsafe to call the openssl_sys versions ourselves and check for errors 
-                */
-                use openssl_sys::{
-                    OBJ_create, NID_undef,
-                    d2i_X509, X509_free, X509_get_ext_by_NID, X509_get_ext, 
-                    X509_EXTENSION_get_data,
-                    ASN1_STRING, ASN1_STRING_length, ASN1_STRING_get0_data
-                };
-                use std::{
-                    ffi::CString,
-                    ptr::{null_mut, null, addr_of_mut},
-                    slice::from_raw_parts
-                };
-
-                let leafder = leafcert.to_der().unwrap();
-                let mut x509_loc_ptr = leafder.as_ptr();
-                let unsafe_x509_cert = d2i_X509(null_mut(), addr_of_mut!(x509_loc_ptr), leafder.len().try_into().unwrap());
-                assert!(!unsafe_x509_cert.is_null(), "Failed to parse X509");
-
-                //CFTypeRef kSecOIDAPPLE_EXTENSION_APPLE_SIGNING = CFSTR("1.2.840.113635.100.6.1.1");
-                let as_obj_id = CString::new("1.2.840.113635.100.6.1.1").unwrap();
-                //let as_short  = CString::new("APPLE_SIGNING").unwrap();
-                //let as_long   = CString::new("APPLE_EXTENSION_APPLE_SIGNING").unwrap();
-                let as_nid    = OBJ_create(as_obj_id.as_ptr(), null(), null());
-                assert!(as_nid != NID_undef, "Failed to create NID");
-
-                let nid_idx = X509_get_ext_by_NID(unsafe_x509_cert, as_nid, -1);
-                if nid_idx != -1 {
-                    println!("Found Apple certificate signing extension, parsing it");
-                    let ext     = X509_get_ext(unsafe_x509_cert, nid_idx);
-                    assert!(!ext.is_null(), "Failed to get extension");
-                    
-                    let val     = X509_EXTENSION_get_data(ext) as *const ASN1_STRING; // infallable according to docs
-                    let len     = ASN1_STRING_length(val);    // infallable according to docs
-                    let dataptr = ASN1_STRING_get0_data(val); // infallable according to docs
-                    let asn1_slice = from_raw_parts(dataptr, len.try_into().unwrap());
-                    let img3_octet = OctetString::from_der(asn1_slice).unwrap().1;
-                    let img3_slice = img3_octet.as_cow();
-
-                    assert_eq!(img3_slice[0..4], IMG3_HEADER_CIGAM, "Apple certificate signing extension does not contain IMG3 data");
-                    args.verify = false;
-                    parse(img3_slice.to_vec(), args, is_valid, devinfo); // skip 2 bytes because those encode the length
-                }
-                X509_free(unsafe_x509_cert);
-            } //end unsafe
+            let has_ext = parse_ext(&leafcert, args, is_valid, devinfo);
 
             let leafpub = leafcert.public_key().unwrap();
 
@@ -132,6 +123,16 @@ fn cert_tag(args: &mut Args,
                         "invalid".red()
                     }
             );
+            if let Some(devinfo) = devinfo {
+                if has_ext {
+                    if devinfo.sdom.is_none() || devinfo.prod.is_none() || devinfo.cpid.is_none() {
+                        println!("Required constraints do not exist in the certificate extension, marking this image invalid.");
+                        *is_valid = false;
+                    }
+                } else {
+                    println!("No extension found, assuming old iBoot component");
+                }
+            }
             println!("This image is {}{}", 
                     if *is_valid {
                         "valid".green()
@@ -139,50 +140,14 @@ fn cert_tag(args: &mut Args,
                         "invalid".red()
                     },
                     if *is_valid { // no point showing the info if it's invalid anyways
-                        if let Some(devinfo) = devinfo {
-                            let mut s = if let Some(ecid) = devinfo.ecid {
-                                vec![format!(" for the device with following:\n\tECID with hex: {ecid:X}")]
-                            } else {
-                                vec![String::from(", but unpersonalized with the following constraints:")]
-                            };
-                            if let Some(board) = &devinfo.bdid {
-                                s.push(format!("\tBoard ID{}: {board}", 
-                                    if board.len() > 1 {"s"} else {""},
-                                    board=board.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
-                                ));
-                            }   
-                            if let Some(chip) = &devinfo.cpid {
-                                s.push(format!("\tChip ID: 0x{chip:X}"));
-                            }
-                            if let Some(sdom) = &devinfo.sdom {
-                                s.push(format!("\tSecurity Domain: 0x{sdom:X} ({})",
-                                match sdom {
-                                    0 => Cow::from("Manufacturer"),
-                                    1 => Cow::from("Darwin"),
-                                    3 => Cow::from("RTXC"),
-                                    x => Cow::from(format!("Unknown Security Domain ({x})"))
-                                }));
-                            }
-                            if let Some(sepo) = &devinfo.sepo {
-                                s.push(format!("\tSecurity Epoch: 0x{sepo:X}"));
-                            }
-                            if let Some(cepo) = &devinfo.cepo {
-                                s.push(format!("\tHardware Epoch: 0x{cepo:X}"));
-                            }
-                            if let Some(prod) = &devinfo.prod {
-                                s.push(format!("\tProduction Mode: {}", match prod {
-                                    0 => "False",
-                                    1 => "True",
-                                    _ => "Unknown"
-                                }));
-                            }
-
-                            s.join("\n")
-                        } else {
-                            String::from(" without constraints")
-                        }
+                        devinfo
+                            .as_mut()
+                            .map_or_else(
+                                || Cow::from(" without constraints"), 
+                                |devinfo| Cow::from(devinfo.to_string())
+                            )
                     } else {
-                        String::new()
+                        Cow::from("")
                     }
             );
             return true;
@@ -254,17 +219,17 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
             let errstack = e.errors();
             let cond = errstack.len() > 1;
             print!("Got {} whilst finalizing the decryption: ", 
-                if cond { "multiple errors" } else { "a error" }
+                if cond { "multiple errors" } else { "an error" }
             );
             if cond {
                 for err in &errstack[..(errstack.len()-1)] {
                     print!("{}, ", 
-                        if let Some(reason) = err.reason() { reason } else { "No reason given" }
+                        err.reason().unwrap_or("No reason given")
                     );
                 }
             }
             println!("{}", 
-                if let Some(reason) = errstack.last().unwrap().reason() { reason } else { "No reason given" }
+                errstack.last().unwrap().reason().unwrap_or("No reason given")
             );
 
             print!("This can sometimes still contain valid data, continue? [y/N]: ");
@@ -298,33 +263,24 @@ fn data_tag(args: &mut Args, head: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
         && args.sigpath.is_none()
         && args.certpath.is_none()
         && args.shshpath.is_none() {
-            write_file(path, &checkvalid_decry(&taghead.buf, head.img3_type, args.ext).unwrap_or(taghead.buf.clone()));
+            write_file(path, &checkvalid_decry(&taghead.buf, head.img3_type, args.ext).unwrap_or_else(|| taghead.buf.clone()));
         }
     }
 }
 
 fn kbag_tag(args: &Args, mainhead: &mut IMG3ObjHeader, taghead: &mut IMG3TagHeader, file: &mut Vec<u8>, i: usize, data: usize) -> bool{
     let mut keyhead = cast_struct!(IMG3KBAG, &taghead.buf);
-    if args.all {
+    if args.all || args.keybags {
         println!("\tKey type: {}", match keyhead.selector {
             0 => String::from("Unencrypted Key"),
             1 => String::from("Production-fused Key"),
             2 => String::from("Development-fused Key"),
             x => format!("Unknown Selector ({x:x})")
         });
-        let ksize = (&keyhead.key_size/8) as usize;
+        let ksize = (keyhead.key_size/8) as usize;
         println!("\tKey size: AES{}", ksize*8);
         println!("\tIV: {iv}", iv=hex::encode(keyhead.iv_bytes));
         println!("\tKey: {key}", key=hex::encode(&keyhead.key_bytes[..ksize]));
-    } else if args.keybags {
-        println!("Key type: {}", match keyhead.selector {
-            0 => String::from("Unencrypted"),
-            1 => String::from("Production"),
-            2 => String::from("Development"),
-            x => format!("Unknown ({x:x})")
-        });
-        println!("IV: {iv}", iv=hex::encode(keyhead.iv_bytes));
-        println!("Key: {key}", key=hex::encode(&keyhead.key_bytes[..(&keyhead.key_size/8) as usize]));
     } else if let Some(kbg) = &args.setkbag {
         assert_eq!(kbg.len(), 3);
         assert!(
@@ -400,61 +356,7 @@ fn kbag_tag(args: &Args, mainhead: &mut IMG3ObjHeader, taghead: &mut IMG3TagHead
     false
 }
 
-/// # Panics
-/// Panics if the arguments are incorrect.
-pub fn create(mut buf: Vec<u8>, args: &Args) {
-    let mut newimg: Vec<u8> = Vec::new();
-    let mut objh = IMG3ObjHeader {
-        magic: IMG3_HEADER_CIGAM,
-        ..Default::default()
-    };
-
-    let mut sects: Vec<IMG3TagHeader> = Vec::new();
-
-    if let Some(settype) = &args.settype {
-        assert!(settype.len() == 4, "Tag is not length 4");
-        objh.img3_type = u32::from_be_bytes(cast_force!(settype.as_bytes(), [u8; 4]));
-        sects.push(IMG3TagHeader {
-            tag: IMG3_GAT_TYPE,
-            skip_dist: 0x20,
-            buf_len: 4,
-            buf: settype.chars().rev().collect::<String>().as_bytes().to_vec(),
-            pad: vec![0; 0x10],
-        });
-    }
-
-    if args.comp {
-        let lzsscomp = compress(&buf);
-        let compsz = lzsscomp.len();
-        let lzsshead = create_complzss_header(&buf, lzsscomp);
-        struct_write!(lzsshead, buf);
-        buf.truncate(384 + compsz);
-    }
-    let datlen = buf.len();
-    sects.push(IMG3TagHeader {
-        tag: IMG3_GAT_DATA,
-        skip_dist: 12 + cast_force!(datlen + datlen % 4, u32),
-        buf_len: cast_force!(datlen, u32),
-        buf,
-        pad: vec![0; datlen % 4]
-    });
-
-    if let Some(vers) = &args.setver {
-        let mut tagbuf = Vec::new();
-        let tagstr = IMG3TagString {
-            str_bytes: vers.clone(),
-            str_len: cast_force!(vers.len(), u32),
-        };
-        struct_write!(tagstr, tagbuf);
-        let buflen = tagbuf.len();
-        sects.push(IMG3TagHeader {
-            tag: IMG3_GAT_VERSION,
-            skip_dist: 12 + cast_force!(buflen + buflen % 4, u32) ,
-            buf_len: cast_force!(buflen, u32),
-            buf: tagbuf,
-            pad: vec![0; buflen % 4],
-        });
-    }
+fn new_kbag(sects: &mut Vec<IMG3TagHeader>, args: &Args) {
     if let Some(kbg) = &args.setkbag {
         let mut tagbuf = Vec::new();
         
@@ -514,9 +416,68 @@ pub fn create(mut buf: Vec<u8>, args: &Args) {
             );
 
             datahead.buf = buf;
-            sects[off] = datahead.clone();
+            sects[off] = datahead;
         }
     }
+}
+
+/// # Panics
+/// Panics if the arguments are incorrect.
+pub fn create(mut buf: Vec<u8>, args: &Args) {
+    let mut newimg: Vec<u8> = Vec::new();
+    let mut objh = IMG3ObjHeader {
+        magic: IMG3_HEADER_CIGAM,
+        ..Default::default()
+    };
+
+    let mut sects: Vec<IMG3TagHeader> = Vec::new();
+
+    if let Some(settype) = &args.settype {
+        assert!(settype.len() == 4, "Tag is not length 4");
+        objh.img3_type = u32::from_be_bytes(cast_force!(settype.as_bytes(), [u8; 4]));
+        sects.push(IMG3TagHeader {
+            tag: IMG3_GAT_TYPE,
+            skip_dist: 0x20,
+            buf_len: 4,
+            buf: settype.chars().rev().collect::<String>().as_bytes().to_vec(),
+            pad: vec![0; 0x10],
+        });
+    }
+
+    if args.comp {
+        let lzsscomp = compress(&buf);
+        let compsz = lzsscomp.len();
+        let lzsshead = create_complzss_header(&buf, lzsscomp);
+        struct_write!(lzsshead, buf);
+        buf.truncate(384 + compsz);
+    }
+    let datlen = buf.len();
+    sects.push(IMG3TagHeader {
+        tag: IMG3_GAT_DATA,
+        skip_dist: 12 + cast_force!(datlen + datlen % 4, u32),
+        buf_len: cast_force!(datlen, u32),
+        buf,
+        pad: vec![0; datlen % 4]
+    });
+
+    if let Some(vers) = &args.setver {
+        let mut tagbuf = Vec::new();
+        let tagstr = IMG3TagString {
+            str_bytes: vers.clone(),
+            str_len: cast_force!(vers.len(), u32),
+        };
+        struct_write!(tagstr, tagbuf);
+        let buflen = tagbuf.len();
+        sects.push(IMG3TagHeader {
+            tag: IMG3_GAT_VERSION,
+            skip_dist: 12 + cast_force!(buflen + buflen % 4, u32) ,
+            buf_len: cast_force!(buflen, u32),
+            buf: tagbuf,
+            pad: vec![0; buflen % 4],
+        });
+    }
+    
+    new_kbag(&mut sects, args);
 
     if let Some(sigpath) = &args.sigpath {
         let sig = fs::read(sigpath).unwrap();
@@ -558,27 +519,14 @@ pub fn create(mut buf: Vec<u8>, args: &Args) {
     write_file(args.outfile.as_ref().unwrap(), &newimg);
 }
 
-/// # Panics
-/// Panics if the buffer does not contain a valid IMG3 file, or the arguments are incorrect.
-pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &mut Option<DeviceInfo>) {
-    let mut head = cast_struct!(IMG3ObjHeader, &file);
-    let mut apticket = None;
-    let sha1 = sha1(&file[range_size(0xC, 0x8 + head.signed_len as usize)]);
-    let partialsha1 = crate::apticket::partial_sha1(&file[range_size(0xC, 0x8 + head.signed_len as usize)]).unwrap();
-
-    //println!("Digest: {}, Partial Digest: {}", hex::encode(&sha1), hex::encode(&partialsha1));
-
-    let mut vers = None;
-    if args.all {
-        println!("{head}");
-    }
-    if let Some(fourcc) = &args.settype {
-        assert!(fourcc.len() == 4, "Tag is not 4 bytes");
-        head.img3_type = u32::from_be_bytes(fourcc.as_bytes().try_into().unwrap());
-        struct_write!(head, file);
-    }
+fn parse_blob(args: &Args, 
+              head: &mut IMG3ObjHeader, 
+              is_ext: bool, 
+              apticket: &mut Option<Vec<u8>>,
+              ecid_size: u32, 
+              file: &mut Vec<u8>) {
     if let Some(shshpath) = &args.shshpath {
-        if head.img3_type != IMG3_TAG_CERT {
+        if !is_ext {
             let imgtype = match head.img3_type {
                 IMG3_TAG_CHG0 => "BatteryCharging0",
                 IMG3_TAG_CHG1 => "BatteryCharging1",
@@ -586,6 +534,7 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                 IMG3_TAG_BAT0 => "BatteryLow0",
                 IMG3_TAG_BAT1 => "BatteryLow1",
                 IMG3_TAG_DTRE => "DeviceTree",
+                IMG3_TAG_DIAG => "Diags",
                 IMG3_TAG_GLYC => "BatteryCharging",
                 IMG3_TAG_GLYP => "BatteryPlugin",
                 IMG3_TAG_IBEC => "iBEC",
@@ -605,47 +554,92 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
             let mut buf = vec![0; 5];
             shshfile.read_exact(&mut buf).expect("Failed to read blob");
 
-            if buf[..2] == [0x30, 0x82] { //apticket
-                apticket = Some(fs::read(shshpath).expect("Failed to read APTicket"));
+            if buf[..2] == [0x30, 0x82] { // raw APTicket
+                *apticket = Some(fs::read(shshpath).expect("Failed to read APTicket"));
             } else {
                 let mut part_dgst = vec![];
-                let blob = if buf == *b"<?xml" { //shsh blob
-                                let fullblob = Value::from_file(shshpath).expect("Failed to read blob");
-                                apticket = Some(fullblob.as_dictionary()
-                                           .and_then(|dict| dict.get("APTicket")?.as_data())
-                                           .expect("Could not decode APTicket")
-                                           .to_vec());
+                let blob;
+                if buf == *b"<?xml" { // SHSH blob
+                    let fullblob = Value::from_file(shshpath).expect("Failed to read blob");
+                    *apticket = fullblob.as_dictionary()
+                               .and_then(|dict| dict.get("APTicket")?.as_data())
+                               .map(<[u8]>::to_vec);
 
-                                part_dgst = fullblob.as_dictionary()
-                                            .and_then(|dict| dict.get(imgtype)?.as_dictionary())
-                                            .and_then(|imgblob| imgblob.get("PartialDigest")?.as_data())
-                                            .expect("Did not find the required PartialDigest (personalization not required?)")
-                                            .to_vec();
-                                assert!(part_dgst.len() > 8, "Partial Digest too small!");
+                    if let Some(imgblob) = fullblob.as_dictionary().and_then(|dict| dict.get(imgtype)?.as_dictionary()) {
+                        part_dgst = imgblob.get("PartialDigest")
+                                    .and_then(|pdigest| pdigest.as_data())
+                                    .expect("Did not find the required PartialDigest (personalization not required?)")
+                                    .to_vec();
+                        assert!(part_dgst.len() > 8, "Partial Digest too small!");
 
-                                fullblob.as_dictionary()
-                                   .and_then(|dict| dict.get(imgtype)?.as_dictionary())
-                                   .and_then(|imgblob| imgblob.get("Blob")?.as_data())
-                                   .expect("Did not find the required blob (personalization not required?)")
-                                   .to_vec()
-                            } else { //raw blob
-                                fs::read(shshpath).expect("Failed to read blob")
-                            };
-                let oldsign = head.signed_len; // should be &part_dgst[4..8] as u32
-                head.signed_len += u32::from_le_bytes(cast_force!(&part_dgst[0..4], [u8; 4]));
-                head.buf_len = oldsign + cast_force!(blob.len(), u32);
-                head.skip_dist = oldsign + cast_force!(blob.len(), u32) + /* sizeof IMG3ObjHeader */ 0x14;
-                file.splice(/* sizeof IMG3ObjHeader */ 0x14 + oldsign as usize.., blob);
-                struct_write!(head, file[0..]);
+                        blob = imgblob.get("Blob")
+                               .and_then(|blob| blob.as_data())
+                               .expect("Did not find the required blob (personalization not required?)")
+                               .to_vec();
+                        let oldsign = head.signed_len - ecid_size; // should be &part_dgst[4..8] as u32
+                        head.signed_len += u32::from_le_bytes(cast_force!(&part_dgst[0..4], [u8; 4]));
+                        head.buf_len = oldsign + cast_force!(blob.len(), u32);
+                        head.skip_dist = oldsign + cast_force!(blob.len(), u32) + /* sizeof IMG3ObjHeader */ 0x14;
+                        file.splice(/* sizeof IMG3ObjHeader */ 0x14 + oldsign as usize.., blob);
+                        struct_write!(head, file[0..]);
+                    }
+                } else { //raw blob
+                    blob = fs::read(shshpath).expect("Failed to read blob");
+                    let oldsign = head.signed_len - ecid_size; // should be &part_dgst[4..8] as u32
+                    head.signed_len += u32::from_le_bytes(cast_force!(&part_dgst[0..4], [u8; 4]));
+                    head.buf_len = oldsign + cast_force!(blob.len(), u32);
+                    head.skip_dist = oldsign + cast_force!(blob.len(), u32) + /* sizeof IMG3ObjHeader */ 0x14;
+                    file.splice(/* sizeof IMG3ObjHeader */ 0x14 + oldsign as usize.., blob);
+                    struct_write!(head, file[0..]);
+                };
             }
         }
+    } else if let Some(argapticket) = &args.apticketbuf {
+        *apticket = Some(argapticket.clone());
     }
+}
+
+/// # Panics
+/// Panics if the buffer does not contain a valid IMG3 file, or the arguments are incorrect.
+#[expect(clippy::too_many_lines, clippy::cognitive_complexity)] // refactor required
+pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &mut Option<DeviceInfo>) -> Option<Vec<u8>> {
+    let mut head = cast_struct!(IMG3ObjHeader, &file);
+    let is_ext = head.img3_type == IMG3_TAG_CERT;
+    let mut apticket = None;
+    let ecid_size = if !is_ext && 
+                    (0x14 + head.signed_len as usize).checked_sub(0x40).is_some() && 
+                    (file[range_size(0x14 + head.signed_len as usize - 0x40, 4)] == IMG3_GAT_UNIQUE_ID ||
+                    file[range_size(0x14 + head.signed_len as usize - 0x40, 4)] == IMG3_GAT_RANDOM) // Haywire specific (?)
+                    { 0x40 } else { 0 };
+    // TODO: remove ECID tag entirely
+    if ecid_size != 0 {
+        head.signed_len -= ecid_size;
+        struct_write!(head, file);
+    }
+    let sha1 = if head.signed_len != 0 { sha1(&file[range_size(0xC, 0x8 + head.signed_len as usize)]) } else { [0;20] };
+    let partialsha1 = if head.signed_len != 0 { crate::apticket::partial_sha1(&file[range_size(0xC, 0x8 + head.signed_len as usize)]).unwrap() } else { Vec::new() };
+    if ecid_size != 0 {
+        head.signed_len += ecid_size;
+        struct_write!(head, file);
+    }
+    let mut vers = None;
+    if args.all {
+        println!("{head}");
+    }
+    if let Some(fourcc) = &args.settype {
+        assert!(fourcc.len() == 4, "Tag is not 4 bytes");
+        head.img3_type = u32::from_be_bytes(fourcc.as_bytes().try_into().unwrap());
+        struct_write!(head, file);
+    }
+    
+    let cached_res = args.apticketbuf.is_some();
+    parse_blob(args, &mut head, is_ext, &mut apticket, ecid_size, &mut file);
 
     let mut i = 20;
     let mut data: usize = 0x34;
     let mut shshdata = Vec::new();
     let mut sawcert = false;
-    while i < head.buf_len as usize { //tag parse loop until EOF
+    while i < 20 + head.buf_len as usize { //tag parse loop until EOF
         let mut taghead = cast_struct!(IMG3TagHeader, &file[i..]);
         let tag = revstr_from_le_bytes(&taghead.tag);
         if args.all {
@@ -680,15 +674,39 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                 }
             }, IMG3_TAG_OVERRIDE => {
                 let ov = u32::from_le_bytes(taghead.buf.try_into().unwrap());
-                println!("\tOverride: {ov}");
+                println!("\tOverride: {} ({ov:#X})", override_types(ov));
+                if let Some(ref mut info) = devinfo {
+                    info.ovrd = Some(ov);
+                } else {
+                    *devinfo = Some(DeviceInfo { ovrd: Some(ov), ..Default::default() });
+                }
             }, IMG3_TAG_KEYBAG => {
                 if kbag_tag(args, &mut head, &mut taghead, &mut file, i, data) { continue; }
             }, IMG3_TAG_CERTIFICATE_CHAIN => {
                 sawcert = true;
                 if let Some(ref apticket) = apticket {
-                    apticket::parse(apticket, head.img3_type, &sha1, &partialsha1, vers.as_deref(), is_valid);
+                    let is_ok = if cached_res { cached_res } else { apticket::validate(apticket) };
+                    if is_ok {
+                        let (_, nonce) = apticket::parse(apticket, head.img3_type, &sha1, &partialsha1, vers.as_deref(), is_valid);
+                        if head.img3_type != IMG3_TAG_IBSS && head.img3_type != IMG3_TAG_ILLB { // only these 2 don't require nonce
+                            if let Some(ref mut devinfo) = devinfo {
+                                devinfo.nonc = nonce;
+                            } else {
+                                *devinfo = Some(DeviceInfo { nonc: nonce, ..Default::default() });
+                            }
+                        }
+                    } else {
+                        println!("Not parsing invalid APTicket.");
+                    }
                 }
-                if cert_tag(args, &mut head, &mut taghead, &mut file, i, &shshdata, is_valid, devinfo) { break; }
+                if let Some(path) = &args.savecertpath {
+                    write_file(path, &taghead.buf);
+                } else if let Some(certpath) = &args.certpath {
+                    let certfile = fs::read(certpath).unwrap();
+                    let taglen = 12 + cast_force!(taghead.buf.len() + taghead.pad.len(), u32);
+                    do_resize(&mut head, &mut taghead, &mut file, i, taglen, certfile);
+                }
+                if cert_tag(args, &head, &taghead, &file, &shshdata, is_valid, devinfo) { break; }
             }, IMG3_TAG_UNIQUE_ID => { //number, but this has a uint64 size
                 if args.all || args.verify {
                     let cur_ecid = u64::from_le_bytes(taghead.buf.try_into().unwrap());
@@ -711,10 +729,12 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                                 x => format!("Unknown Security Domain ({x})")
                     });
                 }
-                if let Some(ref mut devinfo) = devinfo {
-                    devinfo.sdom = Some(sdom);
-                } else {
-                    *devinfo = Some(DeviceInfo { sdom: Some(sdom), ..Default::default() });
+                if is_ext { // SDOM can only be checked from certificate extension
+                    if let Some(ref mut devinfo) = devinfo {
+                        devinfo.sdom = Some(sdom);
+                    } else {
+                        *devinfo = Some(DeviceInfo { sdom: Some(sdom), ..Default::default() });
+                    }
                 }
             }, IMG3_TAG_DATA => {
                 data = i;
@@ -738,20 +758,22 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
 
                 //helper macro for adding in device info
                 macro_rules! add_device_info {
-                    ($field_name: ident) => {
-                        if let Some(ref mut info) = devinfo {
-                            info.$field_name = Some(val);
-                        } else {
-                            *devinfo = Some(DeviceInfo { $field_name: Some(val), ..Default::default() });
+                    ($field_name: ident, $nested: ident) => {
+                        if ($nested && is_ext) || (!$nested) {
+                            if let Some(ref mut info) = devinfo {
+                                info.$field_name = Some(val);
+                            } else {
+                                *devinfo = Some(DeviceInfo { $field_name: Some(val), ..Default::default() });
+                            }
                         }
                     }
                 }
                 
                 match x {
-                    IMG3_TAG_SECURITY_EPOCH    => add_device_info!(sepo), 
-                    IMG3_TAG_PRODUCTION_STATUS => add_device_info!(prod), 
-                    IMG3_TAG_CHIP_TYPE         => add_device_info!(cpid), 
-                    IMG3_TAG_HARDWARE_EPOCH    => add_device_info!(cepo), 
+                    IMG3_TAG_SECURITY_EPOCH    => add_device_info!(sepo, false), 
+                    IMG3_TAG_PRODUCTION_STATUS => add_device_info!(prod, true), 
+                    IMG3_TAG_CHIP_TYPE         => add_device_info!(cpid, true), 
+                    IMG3_TAG_HARDWARE_EPOCH    => add_device_info!(cepo, true), 
                     IMG3_TAG_BOARD_TYPE        => {
                         if let Some(ref mut devinfo) = devinfo {
                             if let Some(ref mut bdid) = devinfo.bdid {
@@ -765,8 +787,16 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
                     }, _ => { unreachable!("This match should be unreachable") }
                 }
             }, 
-            IMG3_TAG_RANDOM_PAD => {},
-            IMG3_TAG_NONCE | IMG3_TAG_RANDOM => {
+            IMG3_TAG_RANDOM_PAD => {}, // ignore padding
+            IMG3_TAG_NONCE => {
+                print_unknown_val(args, &taghead);
+                let val: [u8; 20] = taghead.buf.try_into().unwrap();
+                if let Some(ref mut info) = devinfo {
+                    info.nonc = Some(val);
+                } else {
+                    *devinfo = Some(DeviceInfo { nonc: Some(val), ..Default::default() });
+                }
+            }, IMG3_TAG_RANDOM => {
                 print_unknown_val(args, &taghead);
             }, x => { // assume number
                 print_unknown_val(args, &taghead);
@@ -774,12 +804,6 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
             }
         }
         i += taghead.skip_dist as usize;
-        if i >= file.len() {
-            break;
-        }
-    }
-    if !sawcert && args.verify {
-        println!("File cannot be verified without a CERT and SHSH tag.");
     }
 
     if let Some(path) = &args.outfile {
@@ -794,4 +818,36 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args, is_valid: &mut bool, devinfo: &
             write_file(path, &file);
         }
     }
+
+    if !sawcert && args.verify {
+        if head.img3_type == IMG3_TAG_SCAB {
+            let data = cast_struct!(IMG3TagHeader, &file[data..]);
+            return Some(data.buf);
+        }
+        if let Some(ref apticket) = apticket {
+            let is_ok = if cached_res { cached_res } else { apticket::validate(apticket) };
+            if is_ok {
+                let (mut devinfo, nonce) = apticket::parse(apticket, head.img3_type, &sha1, &partialsha1, vers.as_deref(), is_valid);
+                println!("This image is {} by APTicket{}", 
+                        if *is_valid {
+                            "validated".green()
+                        } else {
+                            "invalidated".red()
+                        },
+                        if *is_valid { // no point showing the info if it's invalid anyways
+                            devinfo.nonc = nonce;
+                            Cow::from(devinfo.to_string())
+                        } else {
+                            Cow::from("")
+                        }
+                );
+            } else {
+                println!("Not parsing invalid APTicket.");
+            }
+        } else {
+            println!("File cannot be verified without either a CERT and SHSH tag, or an APTicket.");
+        }
+    }
+
+    None
 }

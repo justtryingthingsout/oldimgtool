@@ -17,25 +17,24 @@
 */
 
 use crate::{
-    img2,
-    img3,
-    utils::*,
-    Args
+    apticket, img2, img3, utils::{from_utf8, range_size, revstr_from_le_bytes, write_file, BinReaderExt, Cow, Cursor, IMG2Header, IMG2Superblock, IMG3ObjHeader, IMG2_HEADER_CIGAM, IMG3_HEADER_CIGAM, IMG3_TAG_SCAB}, Args
 };
 
 use colored::Colorize;
 use crc32fast::hash;
-use std::path::PathBuf;
+use std::{path::PathBuf, cmp::min};
+use binrw::BinWrite;
 
 /// # Panics
 /// Panics if the buffer does not contain a valid NOR file, or the arguments are incorrect.
-pub fn parse(file: &[u8], args: &Args) {
+#[expect(clippy::too_many_lines)]
+pub fn parse(mut file: Vec<u8>, args: &mut Args) {
     let head = cast_struct!(IMG2Superblock, &file);
     if args.all {
         println!("{head}");
     }
     if args.verify {
-        println!("Superblock Header CRC32 is {}", 
+        println!("Superblock Header CRC32 is {}\n", 
                 if hash(&file[0x0..0x30]) == head.check {
                     "correct".green()
                 } else {
@@ -54,7 +53,7 @@ pub fn parse(file: &[u8], args: &Args) {
     let mut i = ((head.image_offset + head.boot_blocksize) * head.image_granule) as usize;
     let mut global_valid = true;
     let mut invalid = false; // for keeping track of invalid magics
-    while i < (head.image_avail * head.image_granule) as usize {
+    while i < min((head.image_avail * head.image_granule) as usize, file.len()) {
         let mut to_add = 0;
         let mut is_valid = true; // for image verification
         match cast_force!(&file[range_size(i, 4)], [u8; 4]) {
@@ -70,7 +69,7 @@ pub fn parse(file: &[u8], args: &Args) {
                 newargs.outfile = None;
                 img2::parse(&file[i..], &newargs, &mut is_valid, &None);
                 if args.verify {
-                    println!("IMG2 file of type \"{}\" is {}", 
+                    println!("IMG2 file of type \"{}\" is {}\n", 
                         revstr_from_le_bytes(&img2head.img_type),
                         if is_valid {
                             "valid".green()
@@ -83,18 +82,31 @@ pub fn parse(file: &[u8], args: &Args) {
                 to_add = cast_force!(filelen, usize);
                 invalid = false;
             }, IMG3_HEADER_CIGAM => {
-                let img3head = cast_struct!(IMG3ObjHeader, &file[i..]);
-                let mut newargs = args.clone();
+                let mut img3head = cast_struct!(IMG3ObjHeader, &file[i..]);
+                let skipdist = cast_force!(img3head.skip_dist, usize);
+                if img3head.skip_dist > img3head.buf_len + 0x14 + 0x8 {
+                    img3head.skip_dist = img3head.buf_len + 0x14 + 0x8;
+                    struct_write!(img3head, file[i..]);
+                }
                 if let Some(ref path) = dirpath {
                     let mut newpath = path.clone();
                     newpath.push(format!("{}.img3", from_utf8(&img3head.img3_type.to_be_bytes()).unwrap()));
                     write_file(&newpath.to_string_lossy(), &file[range_size(i, img3head.skip_dist as usize)]);
                 }
-                newargs.outfile = None;
+                args.outfile = None;
                 let mut devinfo = None;
-                img3::parse(file[range_size(i, img3head.skip_dist as usize)].to_owned(), &mut newargs, &mut is_valid, &mut devinfo);
-                if args.verify {
-                    println!("IMG3 file of type \"{}\" is {}", 
+                let apticket = img3::parse(file[i..].to_owned(), args, &mut is_valid, &mut devinfo);
+                if img3head.img3_type == IMG3_TAG_SCAB {
+                    println!("SCAB IMG3 found, validating as APTicket...");
+                    let validticket = apticket::validate(apticket.as_ref().unwrap());
+                    if validticket {
+                        args.apticketbuf = apticket;
+                    } else {
+                        println!("Not parsing invalid APTicket.");
+                    }
+                    println!();
+                } else if args.verify {
+                    println!("IMG3 file of type \"{}\" is {}\n", 
                         from_utf8(&img3head.img3_type.to_be_bytes()).unwrap(),
                         if is_valid {
                             "valid".green()
@@ -104,12 +116,12 @@ pub fn parse(file: &[u8], args: &Args) {
                         }
                     );
                 }
-                to_add = cast_force!(img3head.skip_dist, usize);
+                to_add = skipdist;
                 invalid = false;
             },
             x => {
                 if !invalid {
-                    eprintln!("Found unknown image type with magic {}, ignoring", if x.iter().all(|c| 31 < *c && *c < 127) {
+                    eprintln!("Found unknown image type with magic {}, ignoring\n", if x.iter().all(|c| 31 < *c && *c < 127) {
                         Cow::from(std::str::from_utf8(&x).unwrap())
                     } else {
                         Cow::from(format!("{:02x?}", &x))
