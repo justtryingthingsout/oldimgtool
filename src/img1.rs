@@ -36,6 +36,8 @@ use {
             BinWrite,
             Cursor,
             FromDer,
+            LZSSHead,
+            LZSS_MAGIC,
             IMG1_FORMAT_1,
             KEY_837,
             S5L8442_HEADER_MAGIC,
@@ -55,6 +57,7 @@ use {
             write_file
         },
         img2,
+        lzss,
         Args
     },
     colored::Colorize
@@ -195,7 +198,12 @@ pub fn parse(file: &[u8], args: &Args) {
                     write_file(path, &newfile);
                 } else if args.img2 {
                     write_file(path, &decry);
-                }
+                } else if decry[..8] == LZSS_MAGIC {
+                    let lzsstr = cast_struct!(LZSSHead, &decry);
+                    let decomp = lzss::decompress(&lzsstr.comp_data, lzsstr.decomp_len, lzsstr.adler32)
+                        .expect("LZSS did not contain valid data!");
+                    write_file(path, &decomp);
+                } 
             }
             img2::parse(&decry, args, &mut is_valid, &None);
         } else if let Some(path) = &args.outfile {
@@ -207,7 +215,12 @@ pub fn parse(file: &[u8], args: &Args) {
             img2::parse(&file[range_size(datstart, head.size_of_data as usize)], args, &mut is_valid, &None); //requires size_of_data aligned?
         }
         if let Some(path) = &args.outfile {
-            if args.img2 || !is_ios {
+            if file[range_size(datstart, 8)] == LZSS_MAGIC {
+                let lzsstr = cast_struct!(LZSSHead, &file[range_size(datstart, head.size_of_data as usize)]);
+                let decomp = lzss::decompress(&lzsstr.comp_data, lzsstr.decomp_len, lzsstr.adler32)
+                    .expect("LZSS did not contain valid data!");
+                write_file(path, &decomp);
+            } else if args.img2 || !is_ios {
                 write_file(path, &file[range_size(datstart, head.size_of_data as usize)]); //requires size_of_data aligned?
             }
         }
