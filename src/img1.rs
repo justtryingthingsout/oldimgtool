@@ -196,7 +196,7 @@ pub fn parse(file: &[u8], args: &Args) {
                     struct_write!(head, newfile);
                     newfile[range_size(datstart, head.size_of_data as usize)].copy_from_slice(&decry); //requires size_of_data aligned?
                     write_file(path, &newfile);
-                } else if args.img2 {
+                } else if args.img2 || args.ext {
                     write_file(path, &decry);
                 } else if decry[..8] == LZSS_MAGIC {
                     let lzsstr = cast_struct!(LZSSHead, &decry);
@@ -215,12 +215,12 @@ pub fn parse(file: &[u8], args: &Args) {
             img2::parse(&file[range_size(datstart, head.size_of_data as usize)], args, &mut is_valid, &None); //requires size_of_data aligned?
         }
         if let Some(path) = &args.outfile {
-            if file[range_size(datstart, 8)] == LZSS_MAGIC {
+            if file[range_size(datstart, 8)] == LZSS_MAGIC && !args.ext {
                 let lzsstr = cast_struct!(LZSSHead, &file[range_size(datstart, head.size_of_data as usize)]);
                 let decomp = lzss::decompress(&lzsstr.comp_data, lzsstr.decomp_len, lzsstr.adler32)
                     .expect("LZSS did not contain valid data!");
                 write_file(path, &decomp);
-            } else if args.img2 || !is_ios {
+            } else if args.ext || args.img2 || !is_ios {
                 write_file(path, &file[range_size(datstart, head.size_of_data as usize)]); //requires size_of_data aligned?
             }
         }
