@@ -17,85 +17,157 @@
 */
 
 //clippy config
-#![warn(
-    clippy::all, 
-    clippy::pedantic,
-    clippy::nursery,
-    clippy::cargo
-)]
-
+#![warn(clippy::all, clippy::pedantic, clippy::nursery, clippy::cargo)]
 #![allow(clippy::multiple_crate_versions)]
 
 use clap::Parser;
 
 #[macro_use]
 pub mod utils;
-pub mod lzss;
+pub mod apticket;
 pub mod img1;
 pub mod img2;
 pub mod img3;
+pub mod lzss;
 pub mod superblock;
-pub mod apticket;
 
-#[expect(clippy::struct_excessive_bools)]   // arguments struct, can't change much
+#[expect(clippy::struct_excessive_bools)] // arguments struct, can't change much
 #[derive(Parser, Debug, Clone)]
-#[clap(author="@plzdonthaxme", version="1.1", about="A IMG1/2/3 and NOR parser, made in Rust", disable_version_flag=true)]
+#[clap(
+    author = "@plzdonthaxme",
+    version = "1.1",
+    about = "A IMG1/2/3 and NOR parser, made in Rust",
+    disable_version_flag = true
+)]
 pub struct Args {
     //main args
-    #[clap(help="Input filename", value_name="INPUT")]
+    #[clap(help = "Input filename", value_name = "INPUT")]
     pub filename: String,
-    #[clap(help="Output filename", value_name="OUTPUT")]
+    #[clap(help = "Output filename", value_name = "OUTPUT")]
     pub outfile: Option<String>,
-    #[clap(short='v', long, help="Verify the image")]
+    #[clap(short = 'v', long, help = "Verify the image")]
     pub verify: bool,
-    #[clap(long, help="Specify iv for decryption")]
+    #[clap(long, help = "Specify iv for decryption")]
     pub iv: Option<String>,
-    #[clap(short, long, help="Specify key for decryption", value_name="KEY|IVKEY")]
+    #[clap(
+        short,
+        long,
+        help = "Specify key for decryption",
+        value_name = "KEY|IVKEY"
+    )]
     pub key: Option<String>,
-    #[clap(short='e', help="Only extracts, do not decompress (only applies to kernel)")]
+    #[clap(
+        short = 'e',
+        help = "Only extracts, do not decompress (only applies to kernel)"
+    )]
     pub ext: bool,
-    #[clap(long="comp", help="Compress the data before saving (use with -D)")]
+    #[clap(long = "comp", help = "Compress the data before saving (use with -D)")]
     pub comp: bool,
-    #[clap(short='d', help="Only decrypt, do not extract (overrides -e)")]
+    #[clap(short = 'd', help = "Only decrypt, do not extract (overrides -e)")]
     pub dec: bool,
-    #[clap(short='2', help="Keep the IMG2 header, but remove the IMG1 header (IMG1 only)")]
+    #[clap(
+        short = '2',
+        help = "Keep the IMG2 header, but remove the IMG1 header (IMG1 only)"
+    )]
     pub img2: bool,
 
     //getters
-    #[clap(short, help="Output all info about the image", help_heading="Getters")]
+    #[clap(
+        short,
+        help = "Output all info about the image",
+        help_heading = "Getters"
+    )]
     pub all: bool,
-    #[clap(long, help="Print version (IMG2/IMG3)", help_heading="Getters")]
+    #[clap(long, help = "Print version (IMG2/IMG3)", help_heading = "Getters")]
     pub ver: bool,
-    #[clap(short='b', help="Output keybags (IMG3 only)", help_heading="Getters")]
+    #[clap(
+        short = 'b',
+        help = "Output keybags (IMG3 only)",
+        help_heading = "Getters"
+    )]
     pub keybags: bool,
-    #[clap(short='t', help="Output image type (IMG2/IMG3)", help_heading="Getters")]
+    #[clap(
+        short = 't',
+        help = "Output image type (IMG2/IMG3)",
+        help_heading = "Getters"
+    )]
     pub imgtype: bool,
-    #[clap(short='s', help="Save the signature to a file (IMG1/IMG3)", value_name="FILE", help_heading="Getters")]
+    #[clap(
+        short = 's',
+        help = "Save the signature to a file (IMG1/IMG3)",
+        value_name = "FILE",
+        help_heading = "Getters"
+    )]
     pub savesigpath: Option<String>,
-    #[clap(short='c', help="Save the cert chain to a file (IMG1/IMG3)", value_name="FILE", help_heading="Getters")]
+    #[clap(
+        short = 'c',
+        help = "Save the cert chain to a file (IMG1/IMG3)",
+        value_name = "FILE",
+        help_heading = "Getters"
+    )]
     pub savecertpath: Option<String>,
 
     //setters
-    #[clap(short='V', help="Set the version string", value_name="VERSION", help_heading="Setters")]
+    #[clap(
+        short = 'V',
+        help = "Set the version string",
+        value_name = "VERSION",
+        help_heading = "Setters"
+    )]
     pub setver: Option<String>,
     #[clap(short='K', help="Set the keybag and encrypt data with it, type can be prod or dev (IMG3 only)", value_names = &["IV", "KEY", "TYPE"], help_heading="Setters")]
     pub setkbag: Option<Vec<String>>,
-    #[clap(long="no-crypt", help="Only set the keybag, do not encrypt (IMG3 only)", help_heading="Setters")]
+    #[clap(
+        long = "no-crypt",
+        help = "Only set the keybag, do not encrypt (IMG3 only)",
+        help_heading = "Setters"
+    )]
     pub onlykbag: bool,
-    #[clap(short='T', help="Set or rename the image type (4cc)", value_name="TYPE", help_heading="Setters")]
+    #[clap(
+        short = 'T',
+        help = "Set or rename the image type (4cc)",
+        value_name = "TYPE",
+        help_heading = "Setters"
+    )]
     pub settype: Option<String>,
-    #[clap(short='D', help="Set or replace the data buffer from a file. \n(Note: do not use this argument when creating a file, instead put the data in as the input file)", value_name="FILE", help_heading="Setters")]
+    #[clap(
+        short = 'D',
+        help = "Set or replace the data buffer from a file. \n(Note: do not use this argument \
+                when creating a file, instead put the data in as the input file)",
+        value_name = "FILE",
+        help_heading = "Setters"
+    )]
     pub setdata: Option<String>,
-    #[clap(short='S', help="Set or replace the signature from a file", value_name="FILE", help_heading="Setters")]
+    #[clap(
+        short = 'S',
+        help = "Set or replace the signature from a file",
+        value_name = "FILE",
+        help_heading = "Setters"
+    )]
     pub sigpath: Option<String>,
-    #[clap(short='C', help="Set or replace the cert chain from a file", value_name="FILE", help_heading="Setters")]
+    #[clap(
+        short = 'C',
+        help = "Set or replace the cert chain from a file",
+        value_name = "FILE",
+        help_heading = "Setters"
+    )]
     pub certpath: Option<String>,
-    #[clap(short='B', help="Personalize with/stitch a SHSH blob to the IMG3 file", value_name="FILE", help_heading="Setters")]
+    #[clap(
+        short = 'B',
+        help = "Personalize with/stitch a SHSH blob to the IMG3 file",
+        value_name = "FILE",
+        help_heading = "Setters"
+    )]
     pub shshpath: Option<String>,
     #[clap(skip)] // used internally, not an actual cmdline argument
     pub apticketbuf: Option<Vec<u8>>,
 
     //create
-    #[clap(short='m', long, help="Create a image with a image type (setters will be used)", value_name="S5L|IMG3")]
+    #[clap(
+        short = 'm',
+        long,
+        help = "Create a image with a image type (setters will be used)",
+        value_name = "S5L|IMG3"
+    )]
     pub create: Option<String>,
 }

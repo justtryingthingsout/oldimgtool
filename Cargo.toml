@@ -14,18 +14,18 @@ license = "GPL-3.0"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 byteorder = "1"
-binrw = "0.14.1"
+binrw = "0.15"
 phf = { version = "0", features = ["macros"] }
 hex = "0"
 crc32fast = "1"
-openssl = { version="0.10.68" } #add "features = ["vendored"]" for cross-compilation support
-openssl-sys = "0.9.104"
+openssl = { version="0.10" } #add "features = ["vendored"]" for cross-compilation support
+openssl-sys = "0.9"
 asn1-rs = "0"
-colored = "2"
+colored = "3"
 memchr = "2"
 plist = "1"
 lazy_static = "1"
 
 [build-dependencies]
 bindgen = "0"
-cc = "1.2.1"
+cc = "1.2"
