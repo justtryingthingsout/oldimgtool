@@ -1,6 +1,6 @@
 /*
     oldimgtool - A IMG1/2/3 parser and a NOR dump parser
-    Copyright (C) 2024 plzdonthaxme
+    Copyright (C) 2025 plzdonthaxme
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -56,6 +56,12 @@ pub struct Args {
         value_name = "KEY|IVKEY"
     )]
     pub key: Option<String>,
+    #[clap(
+        long = "89A",
+        help = "Specify key 0x89A for signature decryption (IMG3 only)",
+        value_name = "KEY"
+    )]
+    pub key89a: Option<String>,
     #[clap(
         short = 'e',
         help = "Only extracts, do not decompress (only applies to kernel)"

@@ -1,6 +1,6 @@
 /*
     oldimgtool - A IMG1/2/3 parser and a NOR dump parser
-    Copyright (C) 2024 plzdonthaxme
+    Copyright (C) 2025 plzdonthaxme
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -269,6 +269,8 @@ pub fn do_resize(
     struct_write!(head, file[off..]);
     struct_write!(mainhead, file[0..]);
 }
+
+pub const PLAUSABLE_PKCS1: [u8; 10] = [0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
 
 pub const LZSS_MAGIC: [u8; 8] = *b"complzss";
 
@@ -785,9 +787,9 @@ pub struct LZSSHead {
 lazy_static! {
     static ref BOARDMAP: HashMap<(u32, u32), (&'static str, &'static str, &'static str)> = vec![
         ((0x00, 0x8900), ("iPhone 2G",                                          "iPhone1,1",   "m68ap")),
-        // m68dev?
+        ((0x01, 0x8900), ("iPhone 2G Development Board",                        "iPhone1,1",   "m68dev")),
         ((0x04, 0x8900), ("iPhone 3G",                                          "iPhone1,2",   "n82ap")),
-        // n82dev?
+        ((0x05, 0x8900), ("iPhone 3G Development Board",                        "iPhone1,2",   "n82dev")),
         ((0x00, 0x8920), ("iPhone 3GS",                                         "iPhone2,1",   "n88ap")),
         ((0x01, 0x8920), ("iPhone 3GS Development Board",                       "iPhone2,1",   "n88dev")),
         ((0x00, 0x8930), ("iPhone 4 (GSM)",                                     "iPhone3,1",   "n90ap")),
@@ -807,17 +809,17 @@ lazy_static! {
         ((0x0E, 0x8950), ("iPhone 5c (Global)",                                 "iPhone5,4",   "n49ap")),
         ((0x0F, 0x8950), ("iPhone 5c (Global) Development Board",               "iPhone5,4",   "n49dev")),
         ((0x02, 0x8900), ("iPod touch (1st gen)",                               "iPod1,1",     "n45ap")),
-        // n45dev?
+        ((0x03, 0x8900), ("iPod touch (1st gen) Development Board",             "iPod1,1",     "n45dev")),
         ((0x00, 0x8720), ("iPod touch (2nd gen)",                               "iPod2,1",     "n72ap")),
-        // n72dev?
+        ((0x01, 0x8720), ("iPod touch (2nd gen) Development Board",             "iPod2,1",     "n72dev")),
         ((0x02, 0x8922), ("iPod touch (3rd gen)",                               "iPod3,1",     "n18ap")),
-        // n18dev?
+        ((0x03, 0x8922), ("iPod touch (3rd gen) Development Board",             "iPod3,1",     "n18dev")),
         ((0x08, 0x8930), ("iPod touch (4th gen)",                               "iPod4,1",     "n81ap")),
         ((0x09, 0x8930), ("iPod touch (4th gen) Development Board",             "iPod4,1",     "n81dev")),
         ((0x00, 0x8942), ("iPod touch (5th gen)",                               "iPod5,1",     "n78ap")),
         ((0x01, 0x8942), ("iPod touch (5th gen) Development Board",             "iPod5,1",     "n78dev")),
         ((0x02, 0x8930), ("iPad",                                               "iPad1,1",     "k48ap")),
-        // k48dev?
+        ((0x03, 0x8930), ("iPad",                                               "iPad1,1",     "k48ap")),
         ((0x04, 0x8940), ("iPad 2 (WiFi)",                                      "iPad2,1",     "k93ap")),
         ((0x05, 0x8940), ("iPad 2 (WiFi) Development Board",                    "iPad2,1",     "k93dev")),
         ((0x06, 0x8940), ("iPad 2 (GSM)",                                       "iPad2,2",     "k94ap")),
@@ -854,21 +856,25 @@ lazy_static! {
         ((0x01, 0x8747), ("Lightning Digital AV Adapter Development Board",     "iAccy1,1",    "b137dev")),
         ((0x02, 0x8747), ("Lightning Digital VGA Adapter",                      "iAccy1,2",    "b165ap")),
         ((0x03, 0x8747), ("Lightning Digital VGA Adapter Development Board",    "iAccy1,2",    "b165dev")),
-        // s5l8747xfpgaap?
+        ((0x06, 0x8720), ("S5L8720X \"RB\"",                                    "Unknown",     "s5l8720xrbap")),
+        ((0x07, 0x8720), ("S5L8720X \"RB\" Development Board",                  "Unknown",     "s5l8720xrbdev")),
+        ((0x1E, 0x8720), ("S5L8720X iFPGA",                                     "iFPGA",       "s5l8720xfpgaap")),
+        ((0x1F, 0x8720), ("S5L8720X iFPGA Development Board",                   "iFPGA",       "s5l8720xfpgadev")),
+        ((0x3E, 0x8747), ("S5L8747X iFPGA",                                     "iFPGA",       "s5l8747xfpgaap")),
         ((0x3F, 0x8747), ("S5L8747X iFPGA Development Board",                   "iFPGA",       "s5l8747xfpgadev")),
-        // s5l8920xfpgaap?
+        ((0x3E, 0x8920), ("S5L8920X iFPGA",                                     "iFPGA",       "s5l8920xfpgaap")),
         ((0x3F, 0x8920), ("S5L8920X iFPGA Development Board",                   "iFPGA",       "s5l8920xfpgadev")),
-        // s5l8922xfpgaap?
+        ((0x3E, 0x8922), ("S5L8922X iFPGA",                                     "iFPGA",       "s5l8922xfpgaap")),
         ((0x3F, 0x8922), ("S5L8922X iFPGA Development Board",                   "iFPGA",       "s5l8922xfpgadev")),
-        // s5l8930xfpgaap?
+        ((0x1E, 0x8930), ("S5L8930X iFPGA",                                     "iFPGA",       "s5l8930xfpgaap")),
         ((0x1F, 0x8930), ("S5L8930X iFPGA Development Board",                   "iFPGA",       "s5l8930xfpgadev")),
-        // s5l8940xfpgaap?
+        ((0x3E, 0x8940), ("S5L8940X iFPGA",                                     "iFPGA",       "s5l8940xfpgaap")),
         ((0x3F, 0x8940), ("S5L8940X iFPGA Development Board",                   "iFPGA",       "s5l8940xfpgadev")),
-        // s5l8942xfpgaap?
+        ((0x3E, 0x8942), ("S5L8942X iFPGA",                                     "iFPGA",       "s5l8942xfpgaap")),
         ((0x3F, 0x8942), ("S5L8942X iFPGA Development Board",                   "iFPGA",       "s5l8942xfpgadev")),
-        // s5l8945xfpgaap?
+        ((0x3E, 0x8945), ("S5L8945X iFPGA",                                     "iFPGA",       "s5l8945xfpgaap")),
         ((0x3F, 0x8945), ("S5L8945X iFPGA Development Board",                   "iFPGA",       "s5l8945xfpgadev")),
-        // s5l8947xfpgaap?
+        ((0x3E, 0x8947), ("S5L8947X iFPGA",                                     "iFPGA",       "s5l8947xfpgaap")),
         ((0x3F, 0x8947), ("S5L8947X iFPGA Development Board",                   "iFPGA",       "s5l8947xfpgadev")),
         ((0x3C, 0x8950), ("Swifter",                                            "Unknown",     "swifterap")),
         ((0x3D, 0x8950), ("Swifter Development Board",                          "Unknown",     "swifterdev")),

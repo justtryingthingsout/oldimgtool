@@ -1,6 +1,6 @@
 /*
     oldimgtool - A IMG1/2/3 parser and a NOR dump parser
-    Copyright (C) 2024 plzdonthaxme
+    Copyright (C) 2025 plzdonthaxme
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -113,7 +113,8 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args) {
                     ));
                     write_file(
                         &newpath.to_string_lossy(),
-                        &file[range_size(i, img3head.skip_dist as usize)],
+                        // apple might have messed up and forgot to account for the entirety of the image size, so add +4 here
+                        &file[range_size(i, img3head.skip_dist as usize + 4)],
                     );
                 }
                 args.outfile = None;

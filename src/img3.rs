@@ -1,6 +1,6 @@
 /*
     oldimgtool - A IMG1/2/3 parser and a NOR dump parser
-    Copyright (C) 2024 plzdonthaxme
+    Copyright (C) 2025 plzdonthaxme
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@ use {
             IMG3_TAG_OVERRIDE, IMG3_TAG_PRODUCTION_STATUS, IMG3_TAG_RANDOM, IMG3_TAG_RANDOM_PAD,
             IMG3_TAG_RDSK, IMG3_TAG_RDTR, IMG3_TAG_RECM, IMG3_TAG_RKRN, IMG3_TAG_RLGO,
             IMG3_TAG_SCAB, IMG3_TAG_SECURITY_DOMAIN, IMG3_TAG_SECURITY_EPOCH, IMG3_TAG_SIGNED_HASH,
-            IMG3_TAG_TYPE, IMG3_TAG_UNIQUE_ID, IMG3_TAG_VERSION,
+            IMG3_TAG_TYPE, IMG3_TAG_UNIQUE_ID, IMG3_TAG_VERSION, PLAUSABLE_PKCS1,
         },
         Args,
     },
@@ -155,21 +155,47 @@ fn cert_tag(
 
             let leafpub = leafcert.public_key().unwrap();
 
-            let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
-            verifier.set_rsa_padding(Padding::PKCS1).unwrap();
-            verifier
-                .update(&file[12..20 + head.signed_len as usize])
-                .unwrap();
-            let ok = verifier.verify(shshdata).unwrap();
-            println!(
-                "IMG3 file signature is {}",
-                if ok {
-                    "valid".green()
-                } else {
-                    *is_valid = false;
-                    "invalid".red()
-                }
-            );
+            let shshdata = if let Some(ref key89a) = args.key89a {
+                let key = hex::decode(key89a).unwrap();
+                let cipher = Cipher::aes_128_cbc();
+                let mut decrypter = Crypter::new(cipher, Mode::Decrypt, &key, None).unwrap();
+                decrypter.pad(false);
+                let mut decry = vec![0; shshdata.len()];
+                decrypter.update(&shshdata, &mut decry).unwrap();
+                let count = decrypter.finalize(&mut decry).unwrap();
+                decry.truncate(count);
+                decry
+            } else {
+                shshdata.to_vec()
+            };
+
+            let leafrsa = leafpub.rsa().unwrap();
+            let mut sigbuf = vec![0; shshdata.len()];
+            let dec = leafrsa.public_decrypt(&shshdata, &mut sigbuf, Padding::NONE);
+            if dec.is_ok() && sigbuf[0..10] == PLAUSABLE_PKCS1 {
+                // PKCS#1 v1.5 padding
+                let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
+                verifier.set_rsa_padding(Padding::PKCS1).unwrap();
+                verifier
+                    .update(&file[12..20 + head.signed_len as usize])
+                    .unwrap();
+                let ok = verifier.verify(&shshdata).unwrap();
+                println!(
+                    "IMG3 file signature is {}",
+                    if ok {
+                        "valid".green()
+                    } else {
+                        *is_valid = false;
+                        "invalid".red()
+                    }
+                );
+            } else {
+                println!(
+                    "Found a SHSH tag with invalid or possibly key 0x89A encrypted signature, \
+                     skipping verification"
+                );
+            }
+
             if let Some(devinfo) = devinfo {
                 if has_ext {
                     if devinfo.sdom.is_none() || devinfo.prod.is_none() || devinfo.cpid.is_none() {

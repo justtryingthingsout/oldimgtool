@@ -1,6 +1,6 @@
 /*
     oldimgtool - A IMG1/2/3 parser and a NOR dump parser
-    Copyright (C) 2024 plzdonthaxme
+    Copyright (C) 2025 plzdonthaxme
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
