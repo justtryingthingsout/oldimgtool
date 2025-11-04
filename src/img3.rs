@@ -160,9 +160,9 @@ fn cert_tag(
                 let cipher = Cipher::aes_128_cbc();
                 let mut decrypter = Crypter::new(cipher, Mode::Decrypt, &key, None).unwrap();
                 decrypter.pad(false);
-                let mut decry = vec![0; shshdata.len()];
-                decrypter.update(&shshdata, &mut decry).unwrap();
-                let count = decrypter.finalize(&mut decry).unwrap();
+                let mut decry = vec![0; shshdata.len() + cipher.block_size()];
+                let count = decrypter.update(&shshdata, &mut decry).unwrap();
+                decrypter.finalize(&mut decry).unwrap();
                 decry.truncate(count);
                 decry
             } else {
