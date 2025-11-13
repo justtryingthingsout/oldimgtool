@@ -19,7 +19,7 @@
 use {
     crate::{
         utils::{
-            from_utf8, range_size, revstr_from_le_bytes, write_file, BinRead, BinWrite, Cursor,
+            from_utf8, range_size, revstr_from_le_bytes, write_outpath, BinRead, BinWrite, Cursor,
             IMG2ExtHeader, IMG2Header, IMG2_HEADER_CIGAM, IMG2_OPT_ENCRYPTED_IMAGE,
             IMG2_OPT_EXTENSION_PRESENT,
         },
@@ -33,19 +33,19 @@ use {
 
 /// # Panics
 /// Panics if the keys are invalid or the arguments are invalid.
-pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>>) {
+pub fn parse(file: &[u8], args: &mut Args, is_valid: &mut bool, key: &Option<Vec<u8>>) {
     if file[0..4] != IMG2_HEADER_CIGAM {
         return;
     }
     let head = cast_struct!(IMG2Header, file);
     if args.all {
-        println!("{head}");
+        eprintln!("{head}");
     }
     if !args.all && args.imgtype {
-        println!("Image type: {}", revstr_from_le_bytes(&head.img_type));
+        eprintln!("Image type: {}", revstr_from_le_bytes(&head.img_type));
     }
 
-    if let Some(path) = &args.outfile {
+    if let Some(path) = args.outfile.as_mut() {
         if !args.dec && !args.img2 {
             let dataoff = 0x400;
             if let Some(ref key) = key {
@@ -62,16 +62,16 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
                         .unwrap();
                     decrypter.finalize(&mut decry).unwrap();
                     decry.truncate(count);
-                    write_file(path, &decry);
+                    write_outpath(path, &decry);
                 }
             } else {
-                write_file(path, &file[range_size(dataoff, head.data_size as usize)]);
+                write_outpath(path, &file[range_size(dataoff, head.data_size as usize)]);
             }
         }
     }
 
     if args.verify {
-        println!(
+        eprintln!(
             "Header CRC32 is {}",
             if hash(&file[0..0x64]) == head.header_crc32 {
                 "correct".green()
@@ -111,7 +111,7 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
     let mut extsize: usize = head.extsize as usize;
     if head.opts & IMG2_OPT_EXTENSION_PRESENT != 0 || head.extsize != 0xFFFF_FFFF {
         if head.opts & IMG2_OPT_EXTENSION_PRESENT == 0 && (args.verify || args.all) {
-            println!(
+            eprintln!(
                 "Extension header found even through extension option is not set. Will parse \
                  anyways..."
             );
@@ -119,13 +119,13 @@ pub fn parse(file: &[u8], args: &Args, is_valid: &mut bool, key: &Option<Vec<u8>
         loop {
             let exthead = cast_struct_args!(IMG2ExtHeader, &file[extoff..], (head.extsize,));
             if args.all {
-                println!("{exthead}");
+                eprintln!("{exthead}");
             }
             if !args.all && args.ver {
-                println!("Version string: {}", from_utf8(&exthead.data).unwrap());
+                eprintln!("Version string: {}", from_utf8(&exthead.data).unwrap());
             }
             if args.verify {
-                println!(
+                eprintln!(
                     "Extension Header \"{}\" CRC32 is {}",
                     revstr_from_le_bytes(&exthead.ext_type),
                     if hash(&file[range_size(extoff + 4, 12 + extsize)]) == exthead.check {

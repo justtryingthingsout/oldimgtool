@@ -20,11 +20,11 @@ use {
     crate::{
         img2, lzss,
         utils::{
-            range_size, verify_cert, write_file, BinReaderExt, BinWrite, Cursor, FromDer, LZSSHead,
-            S5LHeader, Sequence, IMG1_FORMAT_1, KEY_837, LZSS_MAGIC, S5L8442_HEADER_MAGIC,
-            S5L8443_HEADER_MAGIC, S5L8702_HEADER_MAGIC, S5L8720_HEADER_MAGIC, S5L8723_HEADER_MAGIC,
-            S5L8730_HEADER_MAGIC, S5L8740_HEADER_MAGIC, S5L8900_HEADER_MAGIC, X509_SIGNED,
-            X509_SIGNED_ENCRYPTED,
+            range_size, verify_cert, write_out, write_outpath, BinReaderExt, BinWrite, Cursor,
+            FromDer, LZSSHead, S5LHeader, Sequence, IMG1_FORMAT_1, KEY_837, LZSS_MAGIC,
+            S5L8442_HEADER_MAGIC, S5L8443_HEADER_MAGIC, S5L8702_HEADER_MAGIC, S5L8720_HEADER_MAGIC,
+            S5L8723_HEADER_MAGIC, S5L8730_HEADER_MAGIC, S5L8740_HEADER_MAGIC, S5L8900_HEADER_MAGIC,
+            X509_SIGNED, X509_SIGNED_ENCRYPTED,
         },
         Args,
     },
@@ -36,12 +36,11 @@ use {
         sign::Verifier,
         symm::{encrypt, Cipher, Crypter, Mode},
     },
-    std::fs,
 };
 
 /// # Panics
 /// Panics if the input file is not a valid IMG1 file
-pub fn create(buf: &[u8], args: &Args) {
+pub fn create(buf: &[u8], args: &mut Args) {
     let mut newimg: Vec<u8> = Vec::new();
     let mut objh = S5LHeader {
         platform: S5L8900_HEADER_MAGIC,
@@ -55,14 +54,14 @@ pub fn create(buf: &[u8], args: &Args) {
     let (mut sig, mut cert) = (None, None);
     let img2 = &img2::create(buf, args);
 
-    if let Some(sigpath) = &args.sigpath {
-        sig = Some(fs::read(sigpath).unwrap());
+    if let Some(sigpath) = args.sigpath.as_mut() {
+        sig = Some(read_all!(sigpath).unwrap());
         assert_eq!(sig.as_ref().unwrap().len(), 0x80);
         objh.footer_sig_off = cast_force!(img2.len(), u32);
     }
 
-    if let Some(certpath) = &args.certpath {
-        cert = Some(fs::read(certpath).unwrap());
+    if let Some(certpath) = args.certpath.as_mut() {
+        cert = Some(read_all!(certpath).unwrap());
         let certlen = cert.as_ref().unwrap().len();
         objh.footer_cert_off = objh.footer_sig_off + 0x80;
         objh.footer_cert_len = cast_force!(certlen, u32);
@@ -89,16 +88,16 @@ pub fn create(buf: &[u8], args: &Args) {
     if let Some(cert) = cert {
         newimg.extend_from_slice(&cert);
     }
-    write_file(args.outfile.as_ref().unwrap(), &newimg);
+    write_outpath(args.outfile.as_mut().unwrap(), &newimg);
 }
 
 /// # Panics
 /// Panics if the input file is not a valid IMG1 file
 #[expect(clippy::too_many_lines, clippy::cognitive_complexity)] // refactor required
-pub fn parse(file: &[u8], args: &Args) {
+pub fn parse(file: &[u8], args: &mut Args) {
     let mut head = cast_struct!(S5LHeader, file);
     if args.all {
-        println!("{head}");
+        eprintln!("{head}");
     }
 
     let mut is_valid = true;
@@ -135,16 +134,16 @@ pub fn parse(file: &[u8], args: &Args) {
             lenalign as usize
         };
 
-    if let Some(path) = &args.savesigpath {
+    if let Some(path) = args.savesigpath.as_mut() {
         assert!(sig_off != file.len(), "Signature does not exist!");
-        write_file(path, &file[range_size(sig_off, 0x80)]);
+        write_out(path, &file[range_size(sig_off, 0x80)]);
     }
-    if let Some(path) = &args.savecertpath {
+    if let Some(path) = args.savecertpath.as_mut() {
         assert!(
             datstart + head.footer_cert_off as usize != file.len(),
             "Certificate chain does not exist!"
         );
-        write_file(
+        write_out(
             path,
             &file[range_size(
                 datstart + head.footer_cert_off as usize,
@@ -174,28 +173,28 @@ pub fn parse(file: &[u8], args: &Args) {
             decrypter.finalize(&mut decry).unwrap();
             decry.truncate(count);
 
-            if let Some(path) = &args.outfile {
+            if let Some(path) = args.outfile.as_mut() {
                 if args.dec {
                     let mut newfile = file.to_owned();
                     head.format = X509_SIGNED;
                     struct_write!(head, newfile);
                     newfile[range_size(datstart, head.size_of_data as usize)]
                         .copy_from_slice(&decry); //requires size_of_data aligned?
-                    write_file(path, &newfile);
+                    write_outpath(path, &newfile);
                 } else if args.img2 || args.ext {
-                    write_file(path, &decry);
+                    write_outpath(path, &decry);
                 } else if decry[..8] == LZSS_MAGIC {
                     let lzsstr = cast_struct!(LZSSHead, &decry);
                     let decomp =
                         lzss::decompress(&lzsstr.comp_data, lzsstr.decomp_len, lzsstr.adler32)
                             .expect("LZSS did not contain valid data!");
-                    write_file(path, &decomp);
+                    write_outpath(path, &decomp);
                 }
             }
             img2::parse(&decry, args, &mut is_valid, &None);
-        } else if let Some(path) = &args.outfile {
-            println!("Extracting encrypted data...");
-            write_file(
+        } else if let Some(path) = args.outfile.as_mut() {
+            eprintln!("Extracting encrypted data...");
+            write_outpath(
                 path,
                 &file[range_size(datstart, head.size_of_data as usize)],
             ); //requires size_of_data aligned?
@@ -209,7 +208,7 @@ pub fn parse(file: &[u8], args: &Args) {
                 &None,
             ); //requires size_of_data aligned?
         }
-        if let Some(path) = &args.outfile {
+        if let Some(path) = args.outfile.as_mut() {
             if file[range_size(datstart, 8)] == LZSS_MAGIC && !args.ext {
                 let lzsstr = cast_struct!(
                     LZSSHead,
@@ -217,9 +216,9 @@ pub fn parse(file: &[u8], args: &Args) {
                 );
                 let decomp = lzss::decompress(&lzsstr.comp_data, lzsstr.decomp_len, lzsstr.adler32)
                     .expect("LZSS did not contain valid data!");
-                write_file(path, &decomp);
+                write_outpath(path, &decomp);
             } else if args.ext || args.img2 || !is_ios {
-                write_file(
+                write_outpath(
                     path,
                     &file[range_size(datstart, head.size_of_data as usize)],
                 ); //requires size_of_data aligned?
@@ -236,7 +235,7 @@ pub fn parse(file: &[u8], args: &Args) {
                 .unwrap_or_else(|e| panic!("{} to encrypt S5L SHA1, error: {e}", "Failed".red()))
                 [0..0x10];
 
-            println!(
+            eprintln!(
                 "Header signature is {}",
                 if encd == head.header_signature {
                     "correct".green()
@@ -246,14 +245,14 @@ pub fn parse(file: &[u8], args: &Args) {
                 }
             );
         } else if head.unencrypted_sig != [0; 4] {
-            println!(
+            eprintln!(
                 "Entire S5L header signature cannot be verified without decryption, but trying \
                  with unencrypted left over signature anyways..."
             );
             let mut sha1 = Sha1::new();
             sha1.update(&file[0..0x40]);
             let res = &sha1.finish()[0x10..];
-            println!(
+            eprintln!(
                 "Partial Header signature is {}",
                 if res == head.unencrypted_sig {
                     "correct".green()
@@ -263,7 +262,7 @@ pub fn parse(file: &[u8], args: &Args) {
                 }
             );
         } else {
-            println!("S5L header signature cannot be verified");
+            eprintln!("S5L header signature cannot be verified");
         }
 
         let i = head.footer_cert_off as usize + datstart;
@@ -275,14 +274,14 @@ pub fn parse(file: &[u8], args: &Args) {
             );
 
             if sig_off == 0 {
-                println!("No image signature to verify, assuming it is valid");
+                eprintln!("No image signature to verify, assuming it is valid");
             } else {
                 let leafpub = leafcert.public_key().unwrap();
                 let mut verifier = Verifier::new(MessageDigest::sha1(), &leafpub).unwrap();
                 verifier.set_rsa_padding(Padding::PKCS1).unwrap();
                 verifier.update(&file[0..sig_off]).unwrap();
                 let ok = verifier.verify(&file[range_size(sig_off, 0x80)]).unwrap();
-                println!(
+                eprintln!(
                     "S5L file signature {}",
                     if ok {
                         "matches".green()
@@ -292,7 +291,7 @@ pub fn parse(file: &[u8], args: &Args) {
                     }
                 );
             }
-            println!(
+            eprintln!(
                 "This image is {}",
                 if is_valid {
                     "valid".green()
@@ -301,7 +300,7 @@ pub fn parse(file: &[u8], args: &Args) {
                 }
             );
         } else {
-            println!("Found cert section with invalid certificates, skipping verification");
+            eprintln!("Found cert section with invalid certificates, skipping verification");
         }
     }
 }

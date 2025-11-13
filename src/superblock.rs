@@ -29,7 +29,7 @@ use {
     binrw::BinWrite,
     colored::Colorize,
     crc32fast::hash,
-    std::{cmp::min, fs::create_dir_all, path::PathBuf},
+    std::{cmp::min, fs::create_dir_all},
 };
 
 /// # Panics
@@ -39,10 +39,10 @@ use {
 pub fn parse(mut file: Vec<u8>, args: &mut Args) {
     let head = cast_struct!(IMG2Superblock, &file);
     if args.all {
-        println!("{head}");
+        eprintln!("{head}");
     }
     if args.verify {
-        println!(
+        eprintln!(
             "Superblock Header CRC32 is {}\n",
             if hash(&file[0x0..0x30]) == head.check {
                 "correct".green()
@@ -53,9 +53,9 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args) {
     }
     let mut dirpath = None;
     if let Some(ref out) = args.outfile {
-        dirpath = Some(PathBuf::from(out));
+        dirpath = Some(out.path().to_path_buf());
         let tmp = dirpath.as_ref().unwrap();
-        if tmp.exists() && !tmp.is_dir() {
+        if out.is_std() || (tmp.exists() && !tmp.is_dir()) {
             eprintln!("Please specify a valid output directory to store the extracted files to.");
             return;
         } else if !tmp.exists() {
@@ -76,15 +76,12 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args) {
                 if let Some(ref path) = dirpath {
                     let mut newpath = path.clone();
                     newpath.push(format!("{}.img2", revstr_from_le_bytes(&img2head.img_type)));
-                    write_file(
-                        &newpath.to_string_lossy(),
-                        &file[range_size(i, filelen as usize)],
-                    );
+                    write_file(&newpath, &file[range_size(i, filelen as usize)]);
                 }
                 newargs.outfile = None;
-                img2::parse(&file[i..], &newargs, &mut is_valid, &None);
+                img2::parse(&file[i..], &mut newargs, &mut is_valid, &None);
                 if args.verify {
-                    println!(
+                    eprintln!(
                         "IMG2 file of type \"{}\" is {}\n",
                         revstr_from_le_bytes(&img2head.img_type),
                         if is_valid {
@@ -112,8 +109,9 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args) {
                         from_utf8(&img3head.img3_type.to_be_bytes()).unwrap()
                     ));
                     write_file(
-                        &newpath.to_string_lossy(),
-                        // apple might have messed up and forgot to account for the entirety of the image size, so add +4 here
+                        &newpath,
+                        // apple might have messed up and forgot to account for the entirety of the
+                        // image size, so add +4 here
                         &file[range_size(i, img3head.skip_dist as usize + 4)],
                     );
                 }
@@ -121,16 +119,16 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args) {
                 let mut devinfo = None;
                 let apticket = img3::parse(file[i..].to_owned(), args, &mut is_valid, &mut devinfo);
                 if img3head.img3_type == IMG3_TAG_SCAB && args.verify {
-                    println!("SCAB IMG3 found, validating as APTicket...");
+                    eprintln!("SCAB IMG3 found, validating as APTicket...");
                     let validticket = apticket::validate(apticket.as_ref().unwrap());
                     if validticket {
                         args.apticketbuf = apticket;
                     } else {
-                        println!("Not parsing invalid APTicket.");
+                        eprintln!("Not parsing invalid APTicket.");
                     }
-                    println!();
+                    eprintln!();
                 } else if args.verify {
-                    println!(
+                    eprintln!(
                         "IMG3 file of type \"{}\" is {}\n",
                         from_utf8(&img3head.img3_type.to_be_bytes()).unwrap(),
                         if is_valid {
@@ -162,7 +160,7 @@ pub fn parse(mut file: Vec<u8>, args: &mut Args) {
         i += to_add;
     }
     if args.verify {
-        println!(
+        eprintln!(
             "This bootchain is {}",
             if global_valid {
                 "valid".green()

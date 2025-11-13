@@ -19,22 +19,19 @@
 use {
     clap::Parser,
     colored::Colorize,
-    oldimgtool::{img1, img2, img3, superblock, utils::*, Args},
-    std::fs,
+    oldimgtool::{img1, img2, img3, read_all, superblock, utils::*, Args, CreateType},
 };
 
 fn main() {
     let mut args = Args::parse();
 
     let mut is_valid = true;
-    let fw: Vec<u8> =
-        fs::read(&args.filename).unwrap_or_else(|e| panic!("Cannot read image, error: {e}"));
+    let fw: Vec<u8> = read_all!(&mut args.filename).expect("Cannot read image, error");
     if let Some(create) = &args.create {
         if args.outfile.is_some() {
-            match create.as_str() {
-                "S5L" => img1::create(&fw, &args),
-                "IMG3" => img3::create(fw, &args),
-                x => panic!("Invalid image type: {x}"),
+            match create {
+                CreateType::S5L => img1::create(&fw, &mut args),
+                CreateType::IMG3 => img3::create(fw, &mut args),
             }
         } else {
             panic!("No output file specified");
@@ -45,12 +42,12 @@ fn main() {
             ref x if IMG1_PLATFORMS.contains(x) =>
             // Platform as magic
             {
-                img1::parse(&fw, &args)
+                img1::parse(&fw, &mut args)
             }
             IMG2_HEADER_CIGAM => {
-                img2::parse(&fw, &args, &mut is_valid, &key); //Img2 in le
+                img2::parse(&fw, &mut args, &mut is_valid, &key); //Img2 in le
                 if args.verify {
-                    println!(
+                    eprintln!(
                         "This image is {}",
                         if is_valid {
                             "valid".green()

@@ -29,6 +29,10 @@ pub use {
         borrow::Cow, collections::HashMap, error::Error, fmt, fs::write, ops::Range, str::from_utf8,
     },
 };
+use {
+    clio::{ClioPath, Output},
+    std::{io::Write, path::Path},
+};
 
 //utility macros
 
@@ -76,6 +80,14 @@ macro_rules! struct_write {
         $str.write(&mut Cursor::new(&mut $arr))
             .unwrap_or_else(|e| panic!("Unable to write to buffer: {e}"));
     };
+}
+
+#[macro_export]
+macro_rules! read_all {
+    ($r:expr) => {{
+        let mut v = Vec::new();
+        $r.lock().read_to_end(&mut v).map(|_| v)
+    }};
 }
 
 //utility functions
@@ -139,9 +151,9 @@ pub fn verify_cert(certbuf: &[u8], is_valid: &mut bool) -> X509 {
     }
 
     if found {
-        println!("Assuming \"{}\" is trusted", get_cn(&certs[0]));
+        eprintln!("Assuming \"{}\" is trusted", get_cn(&certs[0]));
     } else {
-        println!("Using built-in Apple Root CA certificate as no root CAs were found.");
+        eprintln!("Using built-in Apple Root CA certificate as no root CAs were found.");
     }
 
     for i in 1..certs.len() {
@@ -150,14 +162,14 @@ pub fn verify_cert(certbuf: &[u8], is_valid: &mut bool) -> X509 {
         match certs[i].verify(&certs[i - 1].public_key().unwrap()) {
             Ok(x) => {
                 if x {
-                    println!("Certificate \"{cn}\" is {}", "valid".green());
+                    eprintln!("Certificate \"{cn}\" is {}", "valid".green());
                 } else {
-                    println!("{} verification of \"{cn}\"", "Failed".red());
+                    eprintln!("{} verification of \"{cn}\"", "Failed".red());
                     *is_valid = false;
                 }
             }
             Err(e) => {
-                println!(
+                eprintln!(
                     "{} verification of \"{cn}\" with error: {e}",
                     "Failed".red()
                 );
@@ -171,8 +183,30 @@ pub fn verify_cert(certbuf: &[u8], is_valid: &mut bool) -> X509 {
 //write a buffer to a file with the specified path
 /// # Panics
 /// Panics if the file cannot be written into
-pub fn write_file(path: &str, arr: &[u8]) {
-    write(path, arr).unwrap_or_else(|e| panic!("Unable to write to \"{path}\": {e}"));
+pub fn write_file(path: &Path, arr: &[u8]) {
+    write(path, arr)
+        .unwrap_or_else(|e| panic!("Unable to write to \"{path}\": {e}", path = path.display()));
+}
+
+//write a buffer to a OutputPath with the specified path
+/// # Panics
+/// Panics if the Output cannot be written into
+pub fn write_outpath(outp: &mut ClioPath, arr: &[u8]) {
+    outp.clone()
+        .create()
+        .and_then(|mut x| {
+            let _ = x.write_all(arr);
+            Ok(())
+        }) // let user pipe into head or similar
+        .unwrap_or_else(|e| panic!("Unable to write to \"{outp}\": {e}"));
+}
+
+//write a buffer to a Output with the specified path
+/// # Panics
+/// Panics if the Output cannot be written into
+pub fn write_out(out: &mut Output, arr: &[u8]) {
+    out.write(arr)
+        .unwrap_or_else(|e| panic!("Unable to write to \"{out}\": {e}"));
 }
 
 //create a range from the start and size
@@ -200,7 +234,7 @@ pub fn print_unknown_val(args: &crate::Args, taghead: &IMG3TagHeader) {
         if numstr.is_empty() {
             numstr = "0";
         }
-        println!("\tValue: 0x{numstr}");
+        eprintln!("\tValue: 0x{numstr}");
     }
 }
 
@@ -323,7 +357,7 @@ pub fn checkvalid_decry(buf: &[u8], expected: u32, ext: bool) -> Option<Vec<u8>>
        (expected == IMG3_TAG_KRNL ||
         expected == IMG3_TAG_RKRN)
     {
-        println!("Found compressed kernelcache");
+        eprintln!("Found compressed kernelcache");
         if !ext {
             let lzsstr = cast_struct!(LZSSHead, buf);
             assert_eq!(&lzsstr.comp_data[0..4], b"\xFF\xCE\xFA\xED");
@@ -336,20 +370,20 @@ pub fn checkvalid_decry(buf: &[u8], expected: u32, ext: bool) -> Option<Vec<u8>>
         || &buf[range_size(0x400, 2)] == HFSX_SIG_WORD)
         && expected == IMG3_TAG_RDSK
     {
-        println!("Found ramdisk");
+        eprintln!("Found ramdisk");
     } else if u32::from_le_bytes(buf[0..4].try_into().unwrap()) < 0x100
         && (expected == IMG3_TAG_DTRE || expected == IMG3_TAG_RDTR)
     {
-        println!("Found devicetree");
+        eprintln!("Found devicetree");
     } else if (&buf[range_size(0x200, 5)] == b"iBoot"
         || &buf[range_size(0x200, 4)] == b"iBSS"
         || &buf[range_size(0x200, 4)] == b"iBEC"
         || &buf[range_size(0x200, 3)] == b"LLB")
         && iboottags.contains(&expected)
     {
-        println!("Found iBoot");
+        eprintln!("Found iBoot");
     } else if &buf[0..7] == b"iBootIm" && imagetags.contains(&expected) {
-        println!("Found iBoot image");
+        eprintln!("Found iBoot image");
     } else if iboottags.contains(&expected)
         || imagetags.contains(&expected)
         || [
@@ -361,7 +395,7 @@ pub fn checkvalid_decry(buf: &[u8], expected: u32, ext: bool) -> Option<Vec<u8>>
         ]
         .contains(&expected)
     {
-        println!("The image may be decrypted with the wrong key. Saving the file anyways...");
+        eprintln!("The image may be decrypted with the wrong key. Extracting anyways...");
     }
     None
 }

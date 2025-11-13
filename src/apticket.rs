@@ -78,17 +78,17 @@ pub fn partial_sha1(buf: &[u8]) -> Option<Vec<u8>> {
         let ctxptr = ctx.as_mut_ptr();
         let mut ret = SHA1Reset(ctxptr);
         if ret != sha_success {
-            println!("SHA1Reset failed, ret: {ret:#X}");
+            eprintln!("SHA1Reset failed, ret: {ret:#X}");
             return None;
         };
         ret = SHA1Input(ctxptr, buf.as_ptr(), u32::try_from(buf.len()).unwrap());
         if ret != sha_success {
-            println!("SHA1Input failed, ret: {ret:#X}");
+            eprintln!("SHA1Input failed, ret: {ret:#X}");
             return None;
         };
         ret = SHA1ResultPartial(ctxptr, digest.as_mut_ptr());
         if ret != sha_success {
-            println!("SHA1Result failed, ret: {ret:#X}");
+            eprintln!("SHA1Result failed, ret: {ret:#X}");
             return None;
         };
         digest.set_len(SHA1HashSize as usize);
@@ -102,7 +102,7 @@ pub fn partial_sha1(buf: &[u8]) -> Option<Vec<u8>> {
 /// Panics when a invalid ``APTicket`` is passed.
 #[must_use]
 pub fn validate(apticket: &[u8]) -> bool {
-    println!("Validating APTicket...");
+    eprintln!("Validating APTicket...");
     let (_, is_valid) = Sequence::from_der_and_then(apticket, |d| {
         let mut is_valid = true;
         let (d, ()) = Sequence::from_der_and_then(d, |d| {
@@ -133,7 +133,7 @@ pub fn validate(apticket: &[u8]) -> bool {
         verifier.set_rsa_padding(Padding::PKCS1).unwrap();
         verifier.update(&data).unwrap();
         let is_ok = verifier.verify(sig).unwrap();
-        println!(
+        eprintln!(
             "APTicket signature is {}",
             if is_ok {
                 "valid".green()
@@ -158,7 +158,7 @@ pub fn parse(
     imgvers: Option<&str>,
     is_valid: &mut bool,
 ) -> (DeviceInfo, Option<[u8; 20]>) {
-    //println!("{}", hex::encode(partialsha1));
+    //eprintln!("{}", hex::encode(partialsha1));
     let mut dfo = DeviceInfo::default();
     let (_, nonce) = Sequence::from_der_and_then(apticket, |d| {
         let (d, _) = Any::from_der(d)?; // ign
@@ -204,29 +204,29 @@ pub fn parse(
                         res = (i, vec);
                     }
                     x if x == fullhash => {
-                        //println!("Digest: {}", hex::encode(cur.as_bytes()));
+                        //eprintln!("Digest: {}", hex::encode(cur.as_bytes()));
                         //dbg!(hex::encode(fullsha1), hex::encode(cur.as_bytes()));
                         if fullsha1 == cur.as_bytes() {
-                            println!("Digest {}", "matches".green());
+                            eprintln!("Digest {}", "matches".green());
                         } else {
-                            println!("Digest does {} match", "not".red());
+                            eprintln!("Digest does {} match", "not".red());
                             val = false;
                         }
                         saw_digest = true;
                     }
                     x if x == partialhash => {
-                        //println!("Partial Digest: {}", hex::encode(cur.as_bytes()));
+                        //eprintln!("Partial Digest: {}", hex::encode(cur.as_bytes()));
                         //dbg!(hex::encode(partialsha1), hex::encode(cur.as_bytes()));
                         if partialsha1 == cur.as_bytes() {
-                            println!("Partial Digest {}", "matches".green());
+                            eprintln!("Partial Digest {}", "matches".green());
                         } else {
-                            println!("Partial Digest does {} match", "not".red());
+                            eprintln!("Partial Digest does {} match", "not".red());
                             val = false;
                         }
                         saw_digest = true;
                     }
                     x if x == trust => {
-                        println!(
+                        eprintln!(
                             "Trusted Component: {}",
                             if u32::from_le_bytes(cast_force!(cur.as_bytes(), [u8; 4])) == 1 {
                                 "True"
@@ -242,17 +242,17 @@ pub fn parse(
                     x if x == build => {
                         if let Some(imgvers) = imgvers {
                             let vers = str::from_utf8(cur.as_bytes()).unwrap();
-                            //println!("Version: {vers}");
+                            //eprintln!("Version: {vers}");
                             if (vers.contains('~') && vers.split('~').next().unwrap() == imgvers)
                                 || vers == imgvers
                             {
-                                println!("Version {}", "matches".green());
+                                eprintln!("Version {}", "matches".green());
                             } else {
-                                println!("Version does {} match", "not".red());
+                                eprintln!("Version does {} match", "not".red());
                                 val = false;
                             }
                         } else {
-                            println!("Version does {} exist", "not".red());
+                            eprintln!("Version does {} exist", "not".red());
                             val = false;
                         }
                     }
@@ -262,7 +262,7 @@ pub fn parse(
             }
             if can_trust {
                 if !saw_digest {
-                    println!("Digest unseen in APTicket, invalidating...");
+                    eprintln!("Digest unseen in APTicket, invalidating...");
                     val = false;
                 }
                 *is_valid = val;
@@ -271,6 +271,6 @@ pub fn parse(
         })
     })
     .unwrap();
-    //println!("NONC: {}", hex::encode(nonce));
+    //eprintln!("NONC: {}", hex::encode(nonce));
     (dfo, nonce)
 }

@@ -20,7 +20,7 @@
 #![warn(clippy::all, clippy::pedantic, clippy::nursery, clippy::cargo)]
 #![allow(clippy::multiple_crate_versions)]
 
-use clap::Parser;
+use {clap::Parser, clio::*};
 
 #[macro_use]
 pub mod utils;
@@ -30,6 +30,13 @@ pub mod img2;
 pub mod img3;
 pub mod lzss;
 pub mod superblock;
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+#[clap(rename_all = "UPPERCASE")]
+pub enum CreateType {
+    S5L,
+    IMG3,
+}
 
 #[expect(clippy::struct_excessive_bools)] // arguments struct, can't change much
 #[derive(Parser, Debug, Clone)]
@@ -41,10 +48,10 @@ pub mod superblock;
 )]
 pub struct Args {
     //main args
-    #[clap(help = "Input filename", value_name = "INPUT")]
-    pub filename: String,
-    #[clap(help = "Output filename", value_name = "OUTPUT")]
-    pub outfile: Option<String>,
+    #[clap(help = "Input filename", value_parser, value_name = "INPUT")]
+    pub filename: Input,
+    #[clap(help = "Output filename", value_parser, value_name = "OUTPUT")]
+    pub outfile: Option<ClioPath>,
     #[clap(short = 'v', long, help = "Verify the image")]
     pub verify: bool,
     #[clap(long, help = "Specify iv for decryption")]
@@ -104,14 +111,14 @@ pub struct Args {
         value_name = "FILE",
         help_heading = "Getters"
     )]
-    pub savesigpath: Option<String>,
+    pub savesigpath: Option<Output>,
     #[clap(
         short = 'c',
         help = "Save the cert chain to a file (IMG1/IMG3)",
         value_name = "FILE",
         help_heading = "Getters"
     )]
-    pub savecertpath: Option<String>,
+    pub savecertpath: Option<Output>,
 
     //setters
     #[clap(
@@ -131,7 +138,7 @@ pub struct Args {
     pub onlykbag: bool,
     #[clap(
         short = 'T',
-        help = "Set or rename the image type (4cc)",
+        help = "Set or rename the image type (4CC)",
         value_name = "TYPE",
         help_heading = "Setters"
     )]
@@ -143,28 +150,28 @@ pub struct Args {
         value_name = "FILE",
         help_heading = "Setters"
     )]
-    pub setdata: Option<String>,
+    pub setdata: Option<Input>,
     #[clap(
         short = 'S',
         help = "Set or replace the signature from a file",
         value_name = "FILE",
         help_heading = "Setters"
     )]
-    pub sigpath: Option<String>,
+    pub sigpath: Option<Input>,
     #[clap(
         short = 'C',
         help = "Set or replace the cert chain from a file",
         value_name = "FILE",
         help_heading = "Setters"
     )]
-    pub certpath: Option<String>,
+    pub certpath: Option<Input>,
     #[clap(
         short = 'B',
         help = "Personalize with/stitch a SHSH blob to the IMG3 file",
         value_name = "FILE",
         help_heading = "Setters"
     )]
-    pub shshpath: Option<String>,
+    pub shshpath: Option<Input>,
     #[clap(skip)] // used internally, not an actual cmdline argument
     pub apticketbuf: Option<Vec<u8>>,
 
@@ -173,7 +180,8 @@ pub struct Args {
         short = 'm',
         long,
         help = "Create a image with a image type (setters will be used)",
-        value_name = "S5L|IMG3"
+        value_name = "TYPE",
+        value_parser = clap::value_parser!(CreateType),
     )]
-    pub create: Option<String>,
+    pub create: Option<CreateType>,
 }
