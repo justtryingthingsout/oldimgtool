@@ -54,10 +54,10 @@ Extracting a image's keybags:
 Output the image's type:  
 `oldimgtool -t iBoot.n94ap.RELEASE.img3`
 
-Personalizing (signing) a image using a SHSH blob and verifying the now signed image's integrity:
+Personalizing (signing) a image using a SHSH blob and verifying the now signed image's integrity:  
 `oldimgtool -B 10.3.4-n41.shsh2 -v iBSS.iphone5.RELEASE.dfu iBSS-signed.img3`
 
-Extracting a NAND firmware dump's components into an `ext` folder, and verifying them fully with the 0x89A key:
+Extracting a NAND firmware dump's components into an `ext` folder, and verifying them fully with the 0x89A key:  
 `oldimgtool -v --89A b17765523de19482adcd455e4cc2ebbf nand_firmware ext/`
 
 ## Building
@@ -74,7 +74,7 @@ In order to get the program to compile, you may need to:
 * Point the OpenSSL installation path to the environmental variable `OPENSSL_DIR` if the installer didn't already
 
 ## Quirks
-This program will output all logs into stderr, so that it's possible to specify `-`/stdout as the output. Thus, if you need to collect the logs (such as when getting image info via the `-a` flag), please pipe stderr instead.
+This program will output all logs into `stderr`, so that it's possible to specify `-`/`stdout` as the output. Thus, if you need to collect the logs (such as when getting image info via the `-a` flag), please pipe `stderr` instead.
 Moreover, the program's logs have color when piped into a tty, but will lose it when piped.
 
 ## Credits
